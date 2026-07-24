@@ -3,8 +3,6 @@ use crate::{
 };
 
 use tokio::{
-    task,
-    net::{ ToSocketAddrs },
     sync::{ broadcast, mpsc },
 };
 
@@ -19,17 +17,22 @@ pub struct ClientChannel {
 }
 
 impl ClientChannel {
-    fn split(self) -> (broadcast::Receiver<ServerPacket>, mpsc::Sender<ClientPacket>) {
+    pub fn split(self) -> (broadcast::Receiver<ServerPacket>, mpsc::Sender<ClientPacket>) {
         (self.receiver, self.sender)
     }
 }
 
-pub struct ServerHandle {
-    pub channel: ServerChannel,
-    pub tcp_server_thread: task::JoinHandle<tokio::io::Result<()>>,
+impl Clone for ClientChannel {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            receiver: self.receiver.resubscribe(),
+        }
+    }
 }
 
+pub trait ServerHandler { }
 
-pub trait Server {
-    fn serve(self, addr: impl ToSocketAddrs) -> impl std::future::Future<Output = tokio::io::Result<ServerHandle>>;
-}
+// pub trait TcpServer {
+//     fn serve(self, addr: impl ToSocketAddrs) -> impl std::future::Future<Output = tokio::io::Result<impl ServerHandler>>;
+// }

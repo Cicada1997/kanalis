@@ -1,34 +1,29 @@
 use crate::{
+    result::Result,
     adapters::{ ClientChannel },
     protocol::{ ClientPacket, /* ServerPacket */ },
 };
 
 use tokio::{
     io::{ AsyncBufReadExt, BufReader, Lines },
+    io::{ AsyncWriteExt },
     net::{ TcpStream },
     net::tcp::{ OwnedWriteHalf, OwnedReadHalf },
 };
 
 pub struct ClientHandler {
-    // socket: TcpStream,
-    // reader: ,
     reader: Lines<BufReader<OwnedReadHalf>>,
     writer: OwnedWriteHalf,
     channel: ClientChannel,
 }
 
-// static BUFFER_SIZE: usize = 1024;
-
 impl ClientHandler {
     pub fn new( socket: TcpStream, channel: ClientChannel ) -> Self {
         let (r, w) = socket.into_split();
 
-        let reader = BufReader::new(r).lines();
-        let writer = w;
-
         Self {
-            reader,
-            writer,
+            reader: BufReader::new(r).lines(),
+            writer: w,
             channel,
         }
     }
@@ -46,7 +41,11 @@ impl ClientHandler {
         Ok(msg)
     }
 
-    pub async fn start(&mut self) -> tokio::io::Result<()> {
+    async fn forward(&self, packet: ClientPacket) {
+        self.channel.sender.send(packet.clone()).await.expect("Channel to server is broken.");
+    }
+
+    pub async fn start(&mut self) -> Result<()> {
         loop {
             tokio::select! {
                 resp = self.reader.next_line() => {
@@ -62,18 +61,23 @@ impl ClientHandler {
                         }
                     };
 
-                    let Ok(msg) = Self::jsonify(&line) else { continue; };
+                    let Ok(packet) = Self::jsonify(&line) else { continue; };
+                    self.forward(packet).await;
+                }
+
+                msg = self.channel.receiver.recv() => {
+                    let msg = msg.unwrap();
 
                     dbg!(&msg);
-                    self.channel.sender.send(msg).await.expect("Broken client channel.");
+                    let json = serde_json::to_string(&msg).expect("Struct cant be serialized to json (???).") + "\n";
 
-                    // if let Err(e) = self.socket.write_all(&buf[0..n]).await {
-                    //     eprintln!("failed to write to socket; err = {:?}", e);
-                    //     return Err(e);
-                    // }
-
+                    if let Err(e) = self.writer.write_all(json.as_bytes()).await {
+                        eprintln!("failed to write to socket; err = {:?}", e);
+                        return Err(e);
+                    }
                 }
             }
+
         }
     }
 }

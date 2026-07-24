@@ -3,28 +3,21 @@ pub mod protocol;
 pub mod client_handler;
 pub mod server;
 
+mod result {
+    pub type Result<T> = tokio::io::Result<T>;
+}
+
 use crate::{
-    adapters::{ Server },
-    server::TcpServer,
+    result::Result,
+    server::{ TcpServerHandle },
 };
 
 static ADDR: &'static str = "localhost:9090";
 
 #[tokio::main]
-async fn main() -> tokio::io::Result<()> {
-    let mut server_handle = TcpServer::new()?
-        .serve(ADDR).await?;
-
-    loop {
-        tokio::select! {
-            packet = server_handle.channel.receiver.recv() => {
-                let Some(packet) = packet else {
-                    println!("Client fucked up channel communication. closing drastically...");
-                    break;
-                };
-            }
-        }
-    }
+async fn main() -> Result<()> {
+    let mut server = TcpServerHandle::new()?;
+    server.start(ADDR).await?;
 
     Ok(())
 }
@@ -41,36 +34,24 @@ async fn test() {
     };
 
     let mut socket = TcpStream::connect(ADDR).await.expect("Could not instantiate socket.");
+    
+    let msg_content = "meddelande till allmänheten!".to_string();
     let packet = ClientPacket::Message {
         token: "tokeneroune".to_string(),
-        content: "meddelande till allmänheten!".to_string(),
+        content: msg_content.clone(),
     };
+
     let json = serde_json::to_string(&packet).expect("malformed component, unable to serialize to json.");
     socket.write_all((json + "\n").as_bytes()).await.expect("Failed to send packet.");
 
     let mut buffer = [0u8; 1024];
 
-    loop {
-        let n = socket.read(&mut buffer).await.unwrap();
-        dbg!(&n);
-        let payload = match str::from_utf8(&buffer[..n]) {
-            Ok(payload) => payload,
-            Err(e) => {
-                eprintln!("Invalid utf_8: {e}.");
-                eprintln!("Buffer dump:\n {buffer:?}");
-                continue;
-            }
-        };
+    // loop {
+    let n = socket.read(&mut buffer).await.unwrap();
+    let payload = str::from_utf8(&buffer[..n]).unwrap();
 
-        let msg: ServerPacket = match serde_json::from_str(payload) {
-            Ok(payload) => payload,
-            Err(e) => {
-                eprintln!("Invalid json in payload: {e}.");
-                eprintln!("Payload dump:\n {payload:?}");
-                continue;
-            }
-        };
+    let msg: ServerPacket = serde_json::from_str(payload).unwrap();
 
-        dbg!(&msg);
-    }
+    let ServerPacket::NewMessage { content, .. } = msg;
+    assert_eq!(msg_content, content);
 }
