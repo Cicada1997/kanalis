@@ -22,22 +22,42 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(name = "client")]
+#[tokio::test]
 async fn test() {
+    use std::{str, time::Duration};
     use tokio::{
-        net::{ TcpStream },
-        io::{ AsyncWriteExt, AsyncReadExt },
+        net::TcpStream,
+        io::{AsyncWriteExt, AsyncReadExt},
     };
 
     use crate::{
-        protocol::{ ServerPacket, ClientPacket },
+        protocol::{ServerPacket, ClientPacket},
+        server::TcpServerHandle,
     };
+
+    // 1. Spawn the server in the background so the socket has something to connect to
+    tokio::spawn(async {
+        let mut server = TcpServerHandle::new().expect("Failed to create server.");
+        server.start(ADDR).await.expect("Server failed to start.");
+    });
+
+    // Allow the server a brief moment to bind to the port
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     let mut socket = TcpStream::connect(ADDR).await.expect("Could not instantiate socket.");
     
+    // Authenticate
+    let packet = ClientPacket::AuthToken("1:UoSAmGCOqe16VCMc3woY8qSSqAskBhSH".to_string());
+    let json = serde_json::to_string(&packet).expect("malformed component, unable to serialize to json.");
+    socket.write_all((json + "\n").as_bytes()).await.expect("Failed to send packet.");
+
+    tokio::time::sleep(Duration::from_millis(2_000)).await;
+
+    // Send message (Fixed syntax error: replaced invalid field with user_id and channel_id u64 integers)
     let msg_content = "meddelande till allmänheten!".to_string();
     let packet = ClientPacket::Message {
-        token: "tokeneroune".to_string(),
+        user_id: 1,
+        channel_id: 1,
         content: msg_content.clone(),
     };
 
@@ -45,8 +65,6 @@ async fn test() {
     socket.write_all((json + "\n").as_bytes()).await.expect("Failed to send packet.");
 
     let mut buffer = [0u8; 1024];
-
-    // loop {
     let n = socket.read(&mut buffer).await.unwrap();
     let payload = str::from_utf8(&buffer[..n]).unwrap();
 

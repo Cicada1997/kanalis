@@ -73,7 +73,7 @@ impl TcpServerHandle {
                 });
             }
 
-
+            _ => {}
         }
 
         Ok(())
