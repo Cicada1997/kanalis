@@ -1,7 +1,7 @@
 use crate::{
     result::Result,
     adapters::{ ClientChannel },
-    protocol::{ ClientPacket, UserDetails },
+    protocol::{ ServerPacket, ClientPacket, UserDetails, ErrorCode },
 };
 
 use reqwest;
@@ -71,6 +71,20 @@ impl ClientHandler {
         }
     }
 
+    pub async fn send_error(&mut self, code: ErrorCode, reason: &str) -> Result<()> {
+        self.send(ServerPacket::Error { code, reason: reason.to_string() }).await
+    }
+
+    pub async fn send(&mut self, packet: ServerPacket) -> Result<()> {
+        let json = serde_json::to_string(&packet).expect("Struct cant be serialized to json (???).") + "\n";
+        if let Err(e) = self.writer.write_all(json.as_bytes()).await {
+            eprintln!("failed to write to socket; err = {:?}", e);
+            return Err(e);
+        }
+
+        Ok(())
+    }
+
     pub async fn start(&mut self) -> Result<()> {
         loop {
             tokio::select! {
@@ -91,6 +105,9 @@ impl ClientHandler {
 
                     if self.user.is_none() {
                         self.user = self.handle_unauthorized(packet).await;
+                        if self.user.is_none() {
+                            self.send_error(0, "Unable to authorize token.").await;
+                        }
                         continue;
                     };
 
@@ -99,9 +116,8 @@ impl ClientHandler {
 
                 msg = self.channel.receiver.recv() => {
                     let msg = msg.unwrap();
-                    let json = serde_json::to_string(&msg).expect("Struct cant be serialized to json (???).") + "\n";
-                    if let Err(e) = self.writer.write_all(json.as_bytes()).await {
-                        eprintln!("failed to write to socket; err = {:?}", e);
+                    if let Err(e) = self.send(msg).await {
+                        eprintln!("failed to write broadcast to socket: {:?}", e);
                         return Err(e);
                     }
                 }

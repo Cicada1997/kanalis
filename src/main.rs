@@ -24,10 +24,10 @@ async fn main() -> Result<()> {
 
 #[tokio::test]
 async fn test() {
-    use std::{str, time::Duration};
+    use std::time::Duration;
     use tokio::{
         net::TcpStream,
-        io::{AsyncWriteExt, AsyncReadExt},
+        io::AsyncWriteExt,
     };
 
     use crate::{
@@ -35,41 +35,83 @@ async fn test() {
         server::TcpServerHandle,
     };
 
-    // 1. Spawn the server in the background so the socket has something to connect to
+    // 1. Spawn the server in the background
     tokio::spawn(async {
         let mut server = TcpServerHandle::new().expect("Failed to create server.");
         server.start(ADDR).await.expect("Server failed to start.");
     });
 
     // Allow the server a brief moment to bind to the port
+    tokio::time::sleep(Duration::from_millis(600)).await;
+
+    let (reader, mut writer) = TcpStream::connect(ADDR)
+        .await
+        .expect("Could not instantiate socket.")
+        .into_split();
+
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut socket = TcpStream::connect(ADDR).await.expect("Could not instantiate socket.");
-    
-    // Authenticate
-    let packet = ClientPacket::AuthToken("1:UoSAmGCOqe16VCMc3woY8qSSqAskBhSH".to_string());
-    let json = serde_json::to_string(&packet).expect("malformed component, unable to serialize to json.");
-    socket.write_all((json + "\n").as_bytes()).await.expect("Failed to send packet.");
+    // 2. Spawn the background reader task
+    let thread = tokio::spawn(async move {
+        use tokio::io::{AsyncBufReadExt, BufReader};
 
-    tokio::time::sleep(Duration::from_millis(2_000)).await;
+        // CRITICAL FIX: Instantiate BufReader outside the loop!
+        // Otherwise, any extra bytes read into the internal buffer are destroyed on the next iteration.
+        let mut lines = BufReader::new(reader).lines();
 
-    // Send message (Fixed syntax error: replaced invalid field with user_id and channel_id u64 integers)
+        loop {
+            let payload = lines
+                .next_line()
+                .await
+                .expect("Failed to read from socket")
+                .expect("Server closed socket prematurely");
+
+            let msg: ServerPacket = serde_json::from_str(&payload).expect("Invalid JSON received");
+            dbg!(&payload);
+
+            match msg {
+                ServerPacket::Error { code, reason } => {
+                    panic!("Server returned error {code}: {reason}");
+                }
+                ServerPacket::NewMessage { .. } => {
+                    break msg;
+                }
+                // Gracefully ignore any other intermediate packets (e.g., auth confirmation)
+                _ => continue, 
+            }
+        }
+    });
+
+    // 3. Authenticate
+    println!("authenticating...");
+    let auth_packet = ClientPacket::AuthToken("1:BV7H6Wxdxnc7eEwt95CeZG7D6VBHOVty".to_string());
+    let json = serde_json::to_string(&auth_packet).expect("Failed to serialize auth packet");
+    writer.write_all((json + "\n").as_bytes()).await.expect("Failed to send auth packet");
+
+    tokio::time::sleep(Duration::from_millis(4_000)).await;
+
+    // 4. Send message
     let msg_content = "meddelande till allmänheten!".to_string();
-    let packet = ClientPacket::Message {
+    let msg_packet = ClientPacket::Message {
         user_id: 1,
         channel_id: 1,
         content: msg_content.clone(),
     };
 
-    let json = serde_json::to_string(&packet).expect("malformed component, unable to serialize to json.");
-    socket.write_all((json + "\n").as_bytes()).await.expect("Failed to send packet.");
+    println!("sending packet...\ncontents: {msg_packet:?}");
+    let json = serde_json::to_string(&msg_packet).expect("Failed to serialize message packet");
+    writer.write_all((json + "\n").as_bytes()).await.expect("Failed to send message packet");
 
-    let mut buffer = [0u8; 1024];
-    let n = socket.read(&mut buffer).await.unwrap();
-    let payload = str::from_utf8(&buffer[..n]).unwrap();
+    println!("listening for echo of message...");
 
-    let msg: ServerPacket = serde_json::from_str(payload).unwrap();
+    // 5. Await response with a fail-fast timeout
+    let msg = tokio::time::timeout(Duration::from_secs(3), thread)
+        .await
+        .expect("Test timed out! The server never echoed the message (likely auth rejection).")
+        .expect("The background reader task panicked!");
 
-    let ServerPacket::NewMessage { content, .. } = msg;
+    let ServerPacket::NewMessage { content, .. } = msg else { 
+        panic!("Response was not of enum 'NewMessage'") 
+    };
     assert_eq!(msg_content, content);
 }

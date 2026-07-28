@@ -28,12 +28,19 @@ pub struct User {
     pub name: String,
 }
 
+pub type ErrorCode = u32;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServerPacket {
     NewMessage {
         user: User,
         content: String,
-    }
+    },
+
+    Error {
+        code: ErrorCode,
+        reason: String,
+    },
 }
 
