@@ -1,7 +1,7 @@
 use crate::{
     result::Result,
     adapters::{ ClientChannel },
-    protocol::{ ServerPacket, ClientPacket, UserDetails, ErrorCode },
+    protocol::{ ServerPacket, ClientPacket, UserDetails, Error },
 };
 
 use reqwest;
@@ -10,7 +10,38 @@ use tokio::{
     io::{ AsyncWriteExt },
     net::{ TcpStream },
     net::tcp::{ OwnedWriteHalf, OwnedReadHalf },
+    sync::mpsc::{ self },
 };
+
+#[derive(Debug, Clone)]
+pub struct ClientConn {
+    inner: mpsc::Sender<ServerPacket>,
+}
+
+impl ClientConn {
+    pub fn new(mut writer: OwnedWriteHalf) -> Self {
+        let (queue_writer, mut queue_reader) = mpsc::channel::<ServerPacket>(100);
+        tokio::spawn(async move {
+            loop {
+                let packet = queue_reader.recv().await;
+                let json = serde_json::to_string(&packet).expect("Struct cant be serialized to json (???).") + "\n";
+                let err = writer.write_all(json.as_bytes()).await.err();
+                eprintln!("{err:?}");
+            }
+        });
+
+        Self {
+            inner: queue_writer,
+        }
+    }
+
+    pub fn send(&self, packet: ServerPacket) {
+        let sender = self.inner.clone();
+        tokio::task::spawn_blocking(async move || {
+            sender.send(packet).await;
+        });
+    }
+}
 
 pub struct ClientHandler {
     reader: Lines<BufReader<OwnedReadHalf>>,
@@ -48,7 +79,7 @@ impl ClientHandler {
         self.channel.sender.send(packet.clone()).await.unwrap();
     }
 
-    pub async fn handle_unauthorized(&self, packet: ClientPacket) -> Option<UserDetails> {
+    pub async fn handle_unauthorized(&mut self, packet: ClientPacket) -> Result<()> {
         match packet {
             ClientPacket::AuthToken( token ) => {
                 let client = reqwest::Client::new();
@@ -57,22 +88,30 @@ impl ClientHandler {
                     .send()
                     .await {
                     Ok(resp) => resp,
-                    Err(_e) => return None,
+                    Err(_e) => {
+                        self.send_error(Error::ConnectionError, "failed to contact auth-server.").await?;
+                        return Ok(())
+                    },
                 };
 
                 if resp.status().is_success() {
-                    return resp.json().await.ok();
+                    self.user = resp.json::<UserDetails>().await.ok();
+                    self.send(ServerPacket::LoginSuccess).await?;
+                } else {
+                    self.send_error(Error::AuthFail, "Unable to authorize token.").await?;
                 }
-
-                None
             }
-            
-            _ => None
+            _ => {
+                self.send_error(Error::Unauthorized, "Unauthorized.").await?;
+            }
         }
+
+        Ok(())
     }
 
-    pub async fn send_error(&mut self, code: ErrorCode, reason: &str) -> Result<()> {
-        self.send(ServerPacket::Error { code, reason: reason.to_string() }).await
+    pub async fn send_error(&mut self, code: Error, reason: &str) -> Result<()> {
+        self.send(ServerPacket::Error { code, reason: reason.to_string() }).await?;
+        Ok(())
     }
 
     pub async fn send(&mut self, packet: ServerPacket) -> Result<()> {
@@ -103,15 +142,11 @@ impl ClientHandler {
 
                     let Ok(packet) = Self::jsonify(&line) else { continue; };
 
-                    if self.user.is_none() {
-                        self.user = self.handle_unauthorized(packet).await;
-                        if self.user.is_none() {
-                            self.send_error(0, "Unable to authorize token.").await;
-                        }
-                        continue;
+                    match self.user {
+                        Some(_) => self.forward(packet).await,
+                        None => self.handle_unauthorized(packet).await?,
                     };
 
-                    self.forward(packet).await;
                 }
 
                 msg = self.channel.receiver.recv() => {

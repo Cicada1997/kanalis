@@ -1,4 +1,6 @@
 use serde::{ Serialize, Deserialize };
+use chrono::prelude::*;
+// use crate::client_handler::ClientConn;
 
 pub type UserId = u64;
 pub type ChannelId = u64;
@@ -13,8 +15,14 @@ pub struct UserDetails {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[serde(untagged)]
 pub enum ClientPacket {
     AuthToken(String),
+    LastUpdated {
+        datetime: DateTime<Utc>, 
+        // #[serde(skip)]
+        // resp: Option<ClientConn>,
+    },
     Message {
         user_id: UserId,
         channel_id: ChannelId,
@@ -28,7 +36,23 @@ pub struct User {
     pub name: String,
 }
 
-pub type ErrorCode = u32;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Error {
+    ConnectionError,
+    AuthFail,
+    Unauthorized,
+}
+
+use std::fmt::Display;
+impl Display for Error {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        write!(fmt, "{:?}", self)?;
+        Ok(())
+    }
+}
+
+impl std::error::Error for Error {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -38,8 +62,10 @@ pub enum ServerPacket {
         content: String,
     },
 
+    // results //
+    LoginSuccess,
     Error {
-        code: ErrorCode,
+        code: Error,
         reason: String,
     },
 }

@@ -2,6 +2,7 @@ pub mod adapters;
 pub mod protocol;
 pub mod client_handler;
 pub mod server;
+pub mod database;
 
 mod result {
     pub type Result<T> = tokio::io::Result<T>;
@@ -25,6 +26,7 @@ async fn main() -> Result<()> {
 #[tokio::test]
 async fn test() {
     use std::time::Duration;
+    use std::io::Write;
     use tokio::{
         net::TcpStream,
         io::AsyncWriteExt,
@@ -35,6 +37,12 @@ async fn test() {
         server::TcpServerHandle,
     };
 
+    let mut token = String::new();
+    print!("Enter kattmys token to proceed: ");
+    std::io::stdout().flush().unwrap();
+    std::io::stdin().read_line(&mut token).unwrap();
+    token = token.trim().to_string();
+
     // 1. Spawn the server in the background
     tokio::spawn(async {
         let mut server = TcpServerHandle::new().expect("Failed to create server.");
@@ -42,7 +50,7 @@ async fn test() {
     });
 
     // Allow the server a brief moment to bind to the port
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     let (reader, mut writer) = TcpStream::connect(ADDR)
         .await
@@ -59,6 +67,8 @@ async fn test() {
         // Otherwise, any extra bytes read into the internal buffer are destroyed on the next iteration.
         let mut lines = BufReader::new(reader).lines();
 
+        let mut login_success = false;
+
         loop {
             let payload = lines
                 .next_line()
@@ -67,28 +77,34 @@ async fn test() {
                 .expect("Server closed socket prematurely");
 
             let msg: ServerPacket = serde_json::from_str(&payload).expect("Invalid JSON received");
-            dbg!(&payload);
+            // dbg!(&payload);
+            println!("{}", serde_json::to_string_pretty(&msg).unwrap());
 
             match msg {
                 ServerPacket::Error { code, reason } => {
                     panic!("Server returned error {code}: {reason}");
+                },
+                ServerPacket::LoginSuccess => {
+                    login_success = true;
                 }
                 ServerPacket::NewMessage { .. } => {
+                    if !login_success {
+                        panic!("did not receive authentication response but received the msg.");
+                    }
+
                     break msg;
                 }
-                // Gracefully ignore any other intermediate packets (e.g., auth confirmation)
-                _ => continue, 
             }
         }
     });
 
     // 3. Authenticate
     println!("authenticating...");
-    let auth_packet = ClientPacket::AuthToken("1:BV7H6Wxdxnc7eEwt95CeZG7D6VBHOVty".to_string());
+    let auth_packet = ClientPacket::AuthToken(token.to_string());
     let json = serde_json::to_string(&auth_packet).expect("Failed to serialize auth packet");
     writer.write_all((json + "\n").as_bytes()).await.expect("Failed to send auth packet");
 
-    tokio::time::sleep(Duration::from_millis(4_000)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     // 4. Send message
     let msg_content = "meddelande till allmänheten!".to_string();

@@ -3,6 +3,7 @@ use crate::{
     adapters::{ ServerHandler, ClientChannel, ServerChannel },
     protocol::{ ClientPacket, ServerPacket, User },
     client_handler::{ ClientHandler },
+    database::{ self, Database },
 };
 
 use tokio::{
@@ -13,6 +14,7 @@ use tokio::{
 pub struct TcpServerHandle {
     channel: ServerChannel,
     client_channel_model: ClientChannel,
+    db: Box<dyn Database + Send + Sync>,
 }
 
 async fn client_dispatch(addr: &'static str, client_channel_model: ClientChannel) {
@@ -26,6 +28,22 @@ async fn client_dispatch(addr: &'static str, client_channel_model: ClientChannel
 }
 
 impl TcpServerHandle {
+    pub fn new() -> Result<Self> {
+        let (to_server, from_clients) = mpsc::channel::<ClientPacket>(100);
+        let (to_clients, from_server) = broadcast::channel::<ServerPacket>(100);
+
+        let client_ch = ClientChannel { sender: to_server, receiver: from_server };
+        let server_ch = ServerChannel { sender: to_clients, receiver: from_clients };
+
+        let db = Box::new(database::ShitDb::new());
+
+        Ok(Self {
+            channel: server_ch,
+            client_channel_model: client_ch,
+            db,
+        })
+    }
+
     async fn recv_from_client(&mut self) -> Option<ClientPacket> {
         self.channel.receiver.recv().await
     }
@@ -34,18 +52,6 @@ impl TcpServerHandle {
         self.channel.sender.send(packet.clone()).expect(&format!("Failed to broadcast message {:?}", packet));
     }
 
-    pub fn new() -> Result<Self> {
-        let (to_server, from_clients) = mpsc::channel::<ClientPacket>(100);
-        let (to_clients, from_server) = broadcast::channel::<ServerPacket>(100);
-
-        let client_ch = ClientChannel { sender: to_server, receiver: from_server };
-        let server_ch = ServerChannel { sender: to_clients, receiver: from_clients };
-
-        Ok(Self {
-            channel: server_ch,
-            client_channel_model: client_ch,
-        })
-    }
 
     pub async fn start(&mut self, addr: &'static str) -> Result<()> {
         let client_channel = self.client_channel_model.clone();
@@ -60,7 +66,7 @@ impl TcpServerHandle {
                 continue;
             };
 
-            self.handle_packet(packet).await?; // .expect("ClientPacket handeler crashed!");
+            self.handle_packet(packet).await?;
         }
     }
 
@@ -71,6 +77,15 @@ impl TcpServerHandle {
                     user: User { name: String::from("Okänd Användare") },
                     content,
                 });
+            }
+
+            ClientPacket::LastUpdated { datetime /* , resp */ } => {
+                let msgs = self.db.get_messages_since(datetime);
+                for _msg in msgs.into_iter() {
+                    // TODO: fix this:
+                    // resp.send(msg.into());
+                }
+                panic!("Not implemented: Unable to update users.")
             }
 
             _ => {}
