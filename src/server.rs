@@ -1,98 +1,76 @@
+use tokio::task::JoinHandle;
+use std::net::ToSocketAddrs;
+
 use crate::{
     result::Result,
-    adapters::{ ServerHandler, ClientChannel, ServerChannel },
     protocol::{ ClientPacket, ServerPacket, User },
+    intercom::{ ServerChannel, ClientChannel },
     client_handler::{ ClientHandler },
-    database::{ self, Database },
+    // database::{ self, Database },
 };
 
-use tokio::{
-    net::{ TcpListener },
-    sync::{ broadcast, mpsc },
-};
-
-pub struct TcpServerHandle {
+pub struct Server {
     channel: ServerChannel,
-    client_channel_model: ClientChannel,
-    db: Box<dyn Database + Send + Sync>,
+    // db: Box<dyn Database + Send + Sync>,
+    serverports: Vec<JoinHandle<()>>,
 }
 
-async fn client_dispatch(addr: &'static str, client_channel_model: ClientChannel) {
-    let listener = TcpListener::bind(addr).await.unwrap();
-    loop {
-        let (socket, addr) = listener.accept().await.unwrap();
-        println!("New connection from '{}'", &addr);
-        let mut client = ClientHandler::new(socket, client_channel_model.clone());
-        tokio::spawn(async move { client.start().await });
-    }
-}
-
-impl TcpServerHandle {
-    pub fn new() -> Result<Self> {
-        let (to_server, from_clients) = mpsc::channel::<ClientPacket>(100);
-        let (to_clients, from_server) = broadcast::channel::<ServerPacket>(100);
-
-        let client_ch = ClientChannel { sender: to_server, receiver: from_server };
-        let server_ch = ServerChannel { sender: to_clients, receiver: from_clients };
-
-        let db = Box::new(database::ShitDb::new());
-
-        Ok(Self {
-            channel: server_ch,
-            client_channel_model: client_ch,
-            db,
-        })
+impl Server {
+    #[must_use]
+    pub fn new() -> Self {
+        let channel = ServerChannel::new();
+        Self { channel, serverports: Vec::new() }
     }
 
-    async fn recv_from_client(&mut self) -> Option<ClientPacket> {
-        self.channel.receiver.recv().await
-    }
+    #[must_use]
+    pub fn add_port<P>(mut self) -> Self
+    where 
+        P: ServerPort + Send + 'static,
+    {
+        let client_channel = self.channel.subscribe();
+        let port = P::new(client_channel);
 
-    fn broadcast(&self, packet: ServerPacket) {
-        self.channel.sender.send(packet.clone()).expect(&format!("Failed to broadcast message {:?}", packet));
-    }
-
-
-    pub async fn start(&mut self, addr: &'static str) -> Result<()> {
-        let client_channel = self.client_channel_model.clone();
-        tokio::spawn(async move {
-            client_dispatch(addr, client_channel).await;
+        let handle = tokio::spawn(async move {
+            port.listen().await;
         });
 
-        loop {
-            let packet = self.recv_from_client().await;
-            let Some(packet) = packet else {
-                println!("Client fucked up channel communication. closing drastically...");
-                continue;
-            };
+        self.serverports.push(handle);
 
-            self.handle_packet(packet).await?;
-        }
+        self
     }
 
-    pub async fn handle_packet(&self, packet: ClientPacket) -> Result<()> {
-        match packet {
-            ClientPacket::Message { content, .. } => {
-                self.broadcast(ServerPacket::NewMessage {
-                    user: User { name: String::from("Okänd Användare") },
-                    content,
-                });
-            }
+    /// # Errors
+    ///
+    /// Dramatic exits are returned as errors. 
+    pub fn serve(&mut self) -> Result<()> {
+        loop {
+            let Some(packet) = self.channel.recv() else { continue };
+            dbg!(&packet);
 
-            ClientPacket::LastUpdated { datetime /* , resp */ } => {
-                let msgs = self.db.get_messages_since(datetime);
-                for _msg in msgs.into_iter() {
-                    // TODO: fix this:
-                    // resp.send(msg.into());
+            match packet {
+                ClientPacket::Message { content, .. } => {
+                    self.channel.send(ServerPacket::NewMessage {
+                        user: User { name: String::from("Okänd Användare") },
+                        content,
+                    });
                 }
-                panic!("Not implemented: Unable to update users.")
+
+                _ => { }
             }
 
-            _ => {}
         }
 
         Ok(())
     }
 }
 
-impl ServerHandler for TcpServerHandle { }
+impl Default for Server {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub trait ServerPort {
+    fn new(client_channel: ClientChannel) -> Self;
+    fn listen(&self) -> impl std::future::Future<Output = Result<()>> + Send;
+}

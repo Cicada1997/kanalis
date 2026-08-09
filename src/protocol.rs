@@ -1,6 +1,5 @@
 use serde::{ Serialize, Deserialize };
 use chrono::prelude::*;
-// use crate::client_handler::ClientConn;
 
 pub type UserId = u64;
 pub type ChannelId = u64;
@@ -47,7 +46,7 @@ pub enum Error {
 use std::fmt::Display;
 impl Display for Error {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(fmt, "{:?}", self)?;
+        write!(fmt, "{self:?}")?;
         Ok(())
     }
 }
