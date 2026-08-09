@@ -1,22 +1,22 @@
 use crate::{
+    result::Result,
     protocol::{ ClientPacket, ServerPacket },
 };
 
-use std::sync::mpsc;
 use tokio::{
-    sync::{ broadcast },
+    sync::{ broadcast, mpsc },
 };
 
 pub struct ServerChannel {
-    receiver: mpsc::Receiver<ClientPacket>,
-    sender_clone: mpsc::Sender<ClientPacket>,
+    receiver: mpsc::UnboundedReceiver<ClientPacket>,
+    sender_clone: mpsc::UnboundedSender<ClientPacket>,
     sender: broadcast::Sender<ServerPacket>,
 }
 
 impl ServerChannel {
     #[must_use]
     pub fn new() -> Self {
-        let (sender_clone, receiver) = mpsc::channel();
+        let (sender_clone, receiver) = mpsc::unbounded_channel();
         let (sender, _) = broadcast::channel(100);
 
         Self { receiver, sender_clone, sender }
@@ -29,15 +29,12 @@ impl ServerChannel {
     }
 
     #[must_use]
-    pub fn recv(&self) -> Option<ClientPacket> {
-        self.receiver
-            .recv()
-            .inspect_err(|e| eprintln!("Broken pipe to client: {e}"))
-            .ok()
+    pub async fn recv(&mut self) -> Option<ClientPacket> {
+        self.receiver.recv().await
     }
 
     pub fn send(&mut self, packet: ServerPacket) {
-        self.sender.send(packet);
+        let _ = self.sender.send(packet);
     }
 }
 
@@ -47,17 +44,21 @@ impl Default for ServerChannel {
 
 pub struct ClientChannel {
     pub receiver: broadcast::Receiver<ServerPacket>,
-    pub sender:   mpsc::Sender<ClientPacket>,
+    pub sender:   mpsc::UnboundedSender<ClientPacket>,
 }
 
 impl ClientChannel {
     #[must_use]
-    pub fn split(self) -> (broadcast::Receiver<ServerPacket>, mpsc::Sender<ClientPacket>) {
+    pub fn split(self) -> (broadcast::Receiver<ServerPacket>, mpsc::UnboundedSender<ClientPacket>) {
         (self.receiver, self.sender)
     }
 
     pub fn send(&mut self, packet: ClientPacket) {
-        self.sender.send(packet);
+        let _ = self.sender.send(packet);
+    }
+
+    pub async fn recv(&mut self) -> Result<ServerPacket> {
+        Ok(self.receiver.recv().await?)
     }
 }
 

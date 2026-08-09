@@ -9,7 +9,6 @@ async fn test() {
 
     use crate::{
         ADDR,
-        result::Result,
         protocol::{ServerPacket, ClientPacket},
         server::{ Server },
         tcp::{ TcpServerPort },
@@ -24,14 +23,15 @@ async fn test() {
     println!("Spawning server process...");
     // 1. Spawn the server in the background
     tokio::spawn(async {
-        Server::new()
+        let _ = Server::new()
             .add_port::<TcpServerPort>()
             .serve()
+            .await;
     });
     println!("Done!");
 
     // Allow the server a brief moment to bind to the port
-    // tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     println!("Establishing connection...");
     let (reader, mut writer) = TcpStream::connect(ADDR)
@@ -77,7 +77,7 @@ async fn test() {
                         panic!("did not receive authentication response but received the msg.");
                     }
 
-                    break msg;
+                    return msg;
                 }
             }
         }
@@ -108,7 +108,7 @@ async fn test() {
     println!("listening for echo of message...");
 
     // 5. Await response with a fail-fast timeout
-    let msg = tokio::time::timeout(Duration::from_secs(3), thread)
+    let msg = tokio::time::timeout(Duration::from_secs(5), thread)
         .await
         .expect("Test timed out! The server never echoed the message (likely auth rejection).")
         .expect("The background reader task panicked!");

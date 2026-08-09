@@ -1,12 +1,9 @@
 use tokio::task::JoinHandle;
-use std::net::ToSocketAddrs;
 
 use crate::{
     result::Result,
     protocol::{ ClientPacket, ServerPacket, User },
     intercom::{ ServerChannel, ClientChannel },
-    client_handler::{ ClientHandler },
-    // database::{ self, Database },
 };
 
 pub struct Server {
@@ -31,7 +28,10 @@ impl Server {
         let port = P::new(client_channel);
 
         let handle = tokio::spawn(async move {
-            port.listen().await;
+            let _ = port
+                .listen()
+                .await
+                .inspect_err(|e| eprintln!("Unable to start port {}: {}", P::name(), e));
         });
 
         self.serverports.push(handle);
@@ -42,10 +42,8 @@ impl Server {
     /// # Errors
     ///
     /// Dramatic exits are returned as errors. 
-    pub fn serve(&mut self) -> Result<()> {
-        loop {
-            let Some(packet) = self.channel.recv() else { continue };
-            dbg!(&packet);
+    pub async fn serve(mut self) -> Result<()> {
+        while let Some(packet) = self.channel.recv().await {
 
             match packet {
                 ClientPacket::Message { content, .. } => {
@@ -73,4 +71,5 @@ impl Default for Server {
 pub trait ServerPort {
     fn new(client_channel: ClientChannel) -> Self;
     fn listen(&self) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn name() -> String;
 }

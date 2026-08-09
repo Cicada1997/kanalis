@@ -9,18 +9,15 @@ use crate::{
 };
 
 use std::{
-    pin::Pin,
-    future::Future,
-    sync::mpsc,
     net::SocketAddr,
 };
 
 use tokio::{
-    io::{ AsyncBufReadExt, BufReader, Lines },
+    io::{ AsyncBufReadExt, BufReader },
     io::{ AsyncWriteExt },
     net::{ TcpStream, TcpListener },
     net::tcp::{ OwnedWriteHalf, OwnedReadHalf },
-    sync::{ broadcast }
+    sync::{ broadcast, mpsc },
 };
 
 pub struct TcpServerPort {
@@ -37,7 +34,7 @@ impl ServerPort for TcpServerPort {
     /// Will return `Err` if the address and port are occupied.
     async fn listen(&self) -> Result<()> {
         println!("Starting tcp port...");
-        let mut listener = TcpListener::bind(ADDR).await?;
+        let listener = TcpListener::bind(ADDR).await?;
         println!("listening for raw tcp socket on {ADDR}...");
 
         loop {
@@ -58,17 +55,21 @@ impl ServerPort for TcpServerPort {
             });
         }
     }
+
+    fn name() -> String {
+        String::from("Tcp Server")
+    }
 }
 
 pub struct ClientTcpConnection {
     reader: broadcast::Receiver<Option<String>>,
-    sender: mpsc::Sender<ServerPacket>,
+    sender: mpsc::UnboundedSender<ServerPacket>,
     addr: SocketAddr,
 }
 
 impl ClientTcpConnection {
     pub fn new(socket: TcpStream, addr: SocketAddr) -> Self {
-        let (sender, recv) = mpsc::channel();
+        let (sender, recv) = mpsc::unbounded_channel();
         let (send, reader) = broadcast::channel(100);
 
         let (tcp_rx, tcp_tx) = socket.into_split();
@@ -89,7 +90,7 @@ impl ClientConnection for ClientTcpConnection {
     }
 
     fn send(&mut self, packet: ServerPacket) {
-        self.sender.send(packet);
+        let _ = self.sender.send(packet);
     }
 
     fn client_id(&self) -> String {
@@ -105,12 +106,12 @@ pub async fn from_client(channel: broadcast::Sender<Option<String>>, reader: Own
         let json_str = match reader.next_line().await {
             Ok(str) => str,
             Err(e) => {
-                eprintln!("Socket read error, closing connection: e");
+                eprintln!("Socket read error, closing connection: {e}");
                 break;
             }
         };
 
-        channel.send(json_str.clone())
+        let _ = channel.send(json_str.clone())
             .inspect_err(|e| eprintln!("unable to forward string {json_str:?}: {e}"));
             // .is_err() { continue }
     }
@@ -119,10 +120,10 @@ pub async fn from_client(channel: broadcast::Sender<Option<String>>, reader: Own
     let _ = channel.send(None);
 }
 
-pub async fn to_client(channel: mpsc::Receiver<ServerPacket>, mut writer: OwnedWriteHalf) {
+pub async fn to_client(mut channel: mpsc::UnboundedReceiver<ServerPacket>, mut writer: OwnedWriteHalf) {
     // todo!("handle scheduled messages to the client")
     loop {
-        let Ok(packet) = channel.recv() else {
+        let Some(packet) = channel.recv().await else {
             // eprintln!("");
             continue
         };
@@ -131,7 +132,7 @@ pub async fn to_client(channel: mpsc::Receiver<ServerPacket>, mut writer: OwnedW
             continue;
         };
 
-        writer.write_all((json_str + "\n").as_bytes())
+        let _ = writer.write_all((json_str + "\n").as_bytes())
             .await
             .inspect_err(|e| eprintln!("unable to send packet {packet:?}: {e}"));
     }

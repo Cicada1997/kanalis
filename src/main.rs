@@ -1,4 +1,3 @@
-#![allow(unused)]
 pub mod server;
 pub mod protocol;
 pub mod intercom;
@@ -28,5 +27,6 @@ async fn main() -> Result<()> {
     Server::new()
         .add_port::<TcpServerPort>()
         .serve()
+        .await
 }
 

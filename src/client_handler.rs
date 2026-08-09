@@ -1,13 +1,7 @@
-use std::sync::mpsc;
-use std::net::SocketAddr;
-use tokio::{
-    net::TcpStream,
-    sync::broadcast,
-};
 use crate::{
-    protocol::{ self, User, UserDetails, ServerPacket, ClientPacket },
+    protocol::{ self, UserDetails, ServerPacket, ClientPacket },
     intercom::{ ClientChannel },
-    connection::{ PinBoxFuture, ClientConnection },
+    connection::{ ClientConnection },
 };
 
 pub struct ClientHandler {
@@ -22,53 +16,65 @@ impl ClientHandler {
         Self { user: None, conn, channel }
     }
 
-    pub async fn start(&mut self) {
-        'unauthorized: loop {
-            let Some(packet) = self.conn.recv().await else {
-                println!("conneciton closed");
+    async fn handle_unauthorized(&mut self, packet: ClientPacket) {
+        match packet {
+            ClientPacket::AuthToken( token ) => {
+                let client = reqwest::Client::new();
+                let resp = match client.post("https://auth.kattmys.se/token-login")
+                    .json(&token)
+                    .send()
+                    .await {
+                        Ok(resp) => resp,
+                        Err(_e) => {
+                            self.conn.send_error(protocol::Error::ConnectionError, "failed to contact auth-server.");
+                            return
+                        },
+                    };
+
+                if !resp.status().is_success() {
+                    self.conn.send_error(protocol::Error::AuthFail, "Unable to authorize token.");
+                    return
+                }
+
+                self.user = resp.json::<UserDetails>().await.ok();
+                self.conn.send(ServerPacket::LoginSuccess);
                 return
-            };
+            }
 
-            dbg!(&packet);
-            
-            match packet {
-                ClientPacket::AuthToken( token ) => {
-                    let client = reqwest::Client::new();
-                    let resp = match client.post("https://auth.kattmys.se/token-login")
-                        .json(&token)
-                        .send()
-                        .await {
-                            Ok(resp) => resp,
-                            Err(_e) => {
-                                self.conn.send_error(protocol::Error::ConnectionError, "failed to contact auth-server.");
-                                continue
-                            },
-                        };
-
-                    if !resp.status().is_success() {
-                        self.conn.send_error(protocol::Error::AuthFail, "Unable to authorize token.");
-                        continue
-                    }
-
-                    self.user = resp.json::<UserDetails>().await.ok();
-                    self.conn.send(ServerPacket::LoginSuccess);
-                    break 'unauthorized
-                }
-
-                _ => {
-                    self.conn.send_error(protocol::Error::Unauthorized, "Unauthorized.");
-                }
+            _ => {
+                self.conn.send_error(protocol::Error::Unauthorized, "Unauthorized.");
             }
         }
+    }
 
-        'authorized: loop {
-            let Some(packet) = self.conn.recv().await else {
-                println!("conneciton closed");
-                return
-            };
+    pub async fn start(&mut self) {
+        loop {
+            tokio::select! {
+                packet = self.conn.recv() => {
+                    let Some(packet) = packet else {
+                        println!("conneciton closed");
+                        return
+                    };
 
-            // temproarily send all packets to the server without filter:
-            self.channel.send(packet);
+                    if self.user.is_none() {
+                        self.handle_unauthorized(packet).await;
+                    } else {
+                        self.channel.send(packet);
+                    }
+                }
+
+                packet = self.channel.recv() => {
+                    let packet = match packet {
+                        Ok(packet) => packet,
+                        Err(e) => {
+                            eprintln!("receive error: {e}");
+                            continue;
+                        }
+                    };
+
+                    self.conn.send(packet);
+                }
+            }
         }
     }
 }
