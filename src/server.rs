@@ -1,4 +1,5 @@
 use tokio::task::JoinHandle;
+use anyhow::anyhow;
 
 use crate::{
     result::Result,
@@ -25,14 +26,21 @@ impl Server {
         P: ServerPort + Send + 'static,
     {
         let client_channel = self.channel.subscribe();
-        let port = P::new(client_channel);
+        let port = match P::new(client_channel) {
+            Ok(port) => port,
+            Err(e) => {
+                eprintln!("Unable to initialize port {}: {}", P::name(), e);
+                return self;
+            }
+        };
 
+        println!("Starting port {}", P::name());
         let handle = tokio::spawn(async move {
             let _ = port
                 .listen()
                 .await
                 .inspect_err(|e| eprintln!("Unable to start port {}: {}", P::name(), e));
-        });
+            });
 
         self.serverports.push(handle);
 
@@ -43,7 +51,12 @@ impl Server {
     ///
     /// Dramatic exits are returned as errors. 
     pub async fn serve(mut self) -> Result<()> {
-        while let Some(packet) = self.channel.recv().await {
+        if self.serverports.is_empty() {
+            return Err(anyhow!("No ports listening for clients, exiting..."));
+        }
+
+        loop {
+            let Some(packet) = self.channel.recv().await else { continue };
 
             match packet {
                 ClientPacket::Message { content, .. } => {
@@ -57,8 +70,6 @@ impl Server {
             }
 
         }
-
-        Ok(())
     }
 }
 
@@ -69,7 +80,11 @@ impl Default for Server {
 }
 
 pub trait ServerPort {
-    fn new(client_channel: ClientChannel) -> Self;
+    /// # Errors
+    ///
+    /// Often return `Err` when the function is not able to get neccessary environment variables and
+    /// more.
+    fn new(client_channel: ClientChannel) -> Result<Self> where Self: Sized;
     fn listen(&self) -> impl std::future::Future<Output = Result<()>> + Send;
     fn name() -> String;
 }

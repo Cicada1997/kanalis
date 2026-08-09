@@ -25,8 +25,8 @@ pub struct TcpServerPort {
 }
 
 impl ServerPort for TcpServerPort {
-    fn new(client_channel: ClientChannel) -> Self {
-        Self { client_channel }
+    fn new(client_channel: ClientChannel) -> Result<Self> {
+        Ok(Self { client_channel })
     }
 
     /// # Errors
@@ -98,7 +98,7 @@ impl ClientConnection for ClientTcpConnection {
     }
 }
 
-pub async fn from_client(channel: broadcast::Sender<Option<String>>, reader: OwnedReadHalf) {
+async fn from_client(channel: broadcast::Sender<Option<String>>, reader: OwnedReadHalf) {
     // todo!("handle incoming client messages")
     let mut reader = BufReader::new(reader).lines();
 
@@ -120,7 +120,7 @@ pub async fn from_client(channel: broadcast::Sender<Option<String>>, reader: Own
     let _ = channel.send(None);
 }
 
-pub async fn to_client(mut channel: mpsc::UnboundedReceiver<ServerPacket>, mut writer: OwnedWriteHalf) {
+async fn to_client(mut channel: mpsc::UnboundedReceiver<ServerPacket>, mut writer: OwnedWriteHalf) {
     // todo!("handle scheduled messages to the client")
     loop {
         let Some(packet) = channel.recv().await else {

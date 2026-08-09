@@ -57,6 +57,9 @@ impl ClientChannel {
         let _ = self.sender.send(packet);
     }
 
+    /// # Errors
+    ///
+    /// Forwarded errors from `tokio::sync::broadcast::Receiver`.
     pub async fn recv(&mut self) -> Result<ServerPacket> {
         Ok(self.receiver.recv().await?)
     }

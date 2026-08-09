@@ -38,7 +38,6 @@ impl ClientHandler {
 
                 self.user = resp.json::<UserDetails>().await.ok();
                 self.conn.send(ServerPacket::LoginSuccess);
-                return
             }
 
             _ => {

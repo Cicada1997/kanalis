@@ -4,9 +4,7 @@ pub mod intercom;
 pub mod client_handler;
 pub mod connection;
 pub mod test;
-
-/// Server Ports ///
-pub mod tcp;
+pub mod ports;
 
 pub mod result {
     use anyhow;
@@ -14,18 +12,24 @@ pub mod result {
     pub type Result<T> = std::result::Result<T, anyhow::Error>;
 }
 
-pub const ADDR: &'static str = "127.0.0.1:9090";
+pub const ADDR: &str = "127.0.0.1:9090";
 
 use crate::{
     result::Result,
     server::{ Server },
-    tcp::{ TcpServerPort },
+    ports::{
+        tcp::{ TcpServerPort },
+        websocket::{ WsServerPort },
+    },
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenv::dotenv().ok();
+
     Server::new()
         .add_port::<TcpServerPort>()
+        .add_port::<WsServerPort>()
         .serve()
         .await
 }
