@@ -37,6 +37,7 @@ pub struct WsServerPort {
 }
 
 async fn websocket_handler(ws: WebSocketUpgrade, ConnectInfo(addr): ConnectInfo<SocketAddr>, State(channel): State<ClientChannel>) -> impl axum::response::IntoResponse {
+    println!("New connection websocket: {addr}");
     ws.on_upgrade(move |socket: WebSocket| async move {
         let conn = ClientWsConnection::new(socket, addr);
         ClientHandler::new(Box::new(conn), channel)
@@ -68,8 +69,10 @@ impl ServerPort for WsServerPort {
 
         let listener = tokio::net::TcpListener::bind(&self.addr).await?;
 
-        axum::serve(listener, app)
-            .await?;
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        ).await?;
 
         Ok(())
     }
@@ -118,8 +121,10 @@ impl ClientConnection for ClientWsConnection {
 
 async fn from_client(channel: broadcast::Sender<Option<String>>, mut reader: SplitStream<WebSocket>) {
     while let Some(Ok(Message::Text(msg))) = reader.next().await {
-        let _ = channel.send(Some(msg.to_string()))
-            .inspect_err(|e| eprintln!("failed to forward message: {e}"));
+        if let Err(e) = channel.send(Some(msg.to_string())) {
+            eprintln!("failed to forward message: {e}");
+            return;
+        }
     }
 
     let _ = channel.send(None);

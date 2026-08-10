@@ -57,6 +57,7 @@ impl Server {
 
         loop {
             let Some(packet) = self.channel.recv().await else { continue };
+            dbg!(&packet);
 
             match packet {
                 ClientPacket::Message { content, .. } => {

@@ -12,7 +12,8 @@ pub mod result {
     pub type Result<T> = std::result::Result<T, anyhow::Error>;
 }
 
-pub const ADDR: &str = "127.0.0.1:9090";
+// pub const ADDR: &str = "127.0.0.1:9090";
+pub const ADDR: &str = "0.0.0.0:9090";
 
 use crate::{
     result::Result,
