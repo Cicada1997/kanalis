@@ -9,9 +9,9 @@ async fn test() {
 
     use crate::{
         ADDR,
-        protocol::{ServerPacket, ClientPacket},
+        protocol::{ ServerPacket, ClientPacket },
         server::{ Server },
-        tcp::{ TcpServerPort },
+        ports::tcp::{ TcpServerPort },
     };
 
     let mut token = String::new();
@@ -69,9 +69,13 @@ async fn test() {
                 ServerPacket::Error { code, reason } => {
                     panic!("Server returned error {code}: {reason}");
                 },
-                ServerPacket::LoginSuccess => {
+                ServerPacket::LoginSuccess { user: _ } => {
+                },
+                ServerPacket::ServerData { name, channels } => {
+                    dbg!(name);
+                    dbg!(channels);
                     login_success = true;
-                }
+                },
                 ServerPacket::NewMessage { .. } => {
                     if !login_success {
                         panic!("did not receive authentication response but received the msg.");
@@ -93,26 +97,37 @@ async fn test() {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // 4. Send message
     let msg_content = "meddelande till allmänheten!".to_string();
-    let msg_packet = ClientPacket::Message {
-        user_id: 1,
-        channel_id: 1,
-        content: msg_content.clone(),
-    };
+    {
+        let msg_packet = ClientPacket::Message {
+            channel_id: 1,
+            content: msg_content.clone(),
+        };
 
-    println!("sending packet...\ncontents: {msg_packet:?}");
-    let json = serde_json::to_string(&msg_packet).expect("Failed to serialize message packet");
-    writer.write_all((json + "\n").as_bytes()).await.expect("Failed to send message packet");
+        println!("sending packet...\ncontents: {msg_packet:?}");
+        let json = serde_json::to_string(&msg_packet).expect("Failed to serialize message packet");
+        writer.write_all((json + "\n").as_bytes()).await.expect("Failed to send message packet");
+    }
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    {
+        let msg_packet = ClientPacket::JustConnected;
+
+        println!("sending packet...\ncontents: {msg_packet:?}");
+        let json = serde_json::to_string(&msg_packet).expect("Failed to serialize message packet");
+        writer.write_all((json + "\n").as_bytes()).await.expect("Failed to send message packet");
+    }
+
+
 
     println!("listening for echo of message...");
-
     // 5. Await response with a fail-fast timeout
     let msg = tokio::time::timeout(Duration::from_secs(5), thread)
         .await
         .expect("Test timed out! The server never echoed the message (likely auth rejection).")
         .expect("The background reader task panicked!");
-
+    
     let ServerPacket::NewMessage { content, .. } = msg else { 
         panic!("Response was not of enum 'NewMessage'") 
     };

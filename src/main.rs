@@ -5,6 +5,7 @@ pub mod client_handler;
 pub mod connection;
 pub mod test;
 pub mod ports;
+pub mod db;
 
 pub mod result {
     use anyhow;
@@ -26,6 +27,11 @@ use crate::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if std::env::args().any(|x| x == "--protocol") {
+        protocol::print_protocol();
+        return Ok(());
+    }
+
     dotenv::dotenv().ok();
 
     Server::new()

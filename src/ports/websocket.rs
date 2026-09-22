@@ -40,7 +40,7 @@ async fn websocket_handler(ws: WebSocketUpgrade, ConnectInfo(addr): ConnectInfo<
     println!("New connection websocket: {addr}");
     ws.on_upgrade(move |socket: WebSocket| async move {
         let conn = ClientWsConnection::new(socket, addr);
-        ClientHandler::new(Box::new(conn), channel)
+        ClientHandler::new(conn, channel)
             .start()
             .await;
     })
@@ -105,9 +105,28 @@ impl ClientWsConnection {
 impl ClientConnection for ClientWsConnection {
     fn recv(&mut self) -> PinBoxFuture<'_, Option<ClientPacket>> {
         Box::pin(async move {
-            let Ok(Some(json_str)) = self.reader.recv().await else { return None };
-            serde_json::from_str::<Option<ClientPacket>>(&json_str).ok().flatten()
+            let response = self.reader.recv().await;
+            let json_str = match response {
+                Ok(Some(json_str)) => json_str,
+                Ok(None) => {
+                    eprintln!("recieved empty packet from client.");
+                    return None
+                },
+                Err(e) => {
+                    eprintln!("recieved error from websocket client: {e:?}");
+                    return None
+                }
+            };
+
+            serde_json::from_str::<Option<ClientPacket>>(&json_str)
+                .inspect_err(|e| eprintln!("malformed packet from client: {e:?}"))
+                .ok()
+                .flatten()
         })
+    }
+
+    fn sender(&self) -> mpsc::UnboundedSender<ServerPacket> {
+        self.sender.clone()
     }
 
     fn send(&mut self, packet: ServerPacket) {

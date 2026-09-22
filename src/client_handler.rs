@@ -1,18 +1,20 @@
+use tokio::sync::oneshot;
+
 use crate::{
     protocol::{ self, UserDetails, ServerPacket, ClientPacket },
-    intercom::{ ClientChannel },
+    intercom::{ self, ClientChannel },
     connection::{ ClientConnection },
 };
 
-pub struct ClientHandler {
+pub struct ClientHandler<C: ClientConnection> {
     user: Option<UserDetails>,
-    conn: Box<dyn ClientConnection>,
+    conn: C, //Box<dyn ClientConnection>,
     channel: ClientChannel,
 }
 
-impl ClientHandler {
+impl<C: ClientConnection> ClientHandler<C> {
     #[must_use]
-    pub fn new(conn: Box<dyn ClientConnection>, channel: ClientChannel) -> Self {
+    pub const fn new(conn: C, channel: ClientChannel) -> Self {
         Self { user: None, conn, channel }
     }
 
@@ -37,7 +39,18 @@ impl ClientHandler {
                 }
 
                 self.user = resp.json::<UserDetails>().await.ok();
-                self.conn.send(ServerPacket::LoginSuccess);
+                if let Some(user) = self.user.clone() {
+                    // let (sender, response_ch) = oneshot::channel();
+
+                    self.channel.send(intercom::Request {
+                        packet: ClientPacket::JustConnected(self.channel.get_sender()),
+                        user: user.clone(),
+                    });
+
+                    self.conn.send(ServerPacket::LoginSuccess { user });
+                } else {
+                    self.conn.send_error(protocol::Error::AuthFail, "invalid json in response from auth server.");
+                }
             }
 
             _ => {
@@ -51,14 +64,18 @@ impl ClientHandler {
             tokio::select! {
                 packet = self.conn.recv() => {
                     let Some(packet) = packet else {
-                        println!("conneciton closed");
+                        println!("connection closed");
                         return
                     };
 
-                    if self.user.is_none() {
-                        self.handle_unauthorized(packet).await;
+                    if let Some(user) = &self.user {
+                        self.channel.send(intercom::Request {
+                            packet,
+                            user: user.clone(),
+                        });
+
                     } else {
-                        self.channel.send(packet);
+                        self.handle_unauthorized(packet).await;
                     }
                 }
 

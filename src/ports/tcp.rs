@@ -50,7 +50,7 @@ impl ServerPort for TcpServerPort {
             let channel = self.client_channel.clone();
 
             tokio::spawn(async move {
-                let mut handler = ClientHandler::new(Box::new(conn), channel);
+                let mut handler = ClientHandler::new(conn, channel);
                 handler.start().await;
             });
         }
@@ -89,6 +89,10 @@ impl ClientConnection for ClientTcpConnection {
         })
     }
 
+    fn sender(&self) -> mpsc::UnboundedSender<ServerPacket> {
+        self.sender.clone()
+    }
+
     fn send(&mut self, packet: ServerPacket) {
         let _ = self.sender.send(packet);
     }
@@ -111,9 +115,10 @@ async fn from_client(channel: broadcast::Sender<Option<String>>, reader: OwnedRe
             }
         };
 
-        let _ = channel.send(json_str.clone())
-            .inspect_err(|e| eprintln!("unable to forward string {json_str:?}: {e}"));
-            // .is_err() { continue }
+        if let Err(e) = channel.send(json_str.clone()) {
+            eprintln!("unable to forward string {json_str:?}: {e}");
+            break;
+        }
     }
 
     // TODO: ensure connection is closed
