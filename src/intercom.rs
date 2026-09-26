@@ -56,6 +56,7 @@ pub struct ClientChannel {
 }
 
 impl ClientChannel {
+    #[must_use]
     pub fn new(receiver: broadcast::Receiver<ServerPacket>, sender: mpsc::UnboundedSender<Request>) -> Self {
         let (reply_sender_model, replies) = mpsc::channel(128);
 

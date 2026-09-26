@@ -1,5 +1,3 @@
-use tokio::sync::oneshot;
-
 use crate::{
     protocol::{ self, UserDetails, ServerPacket, ClientPacket },
     intercom::{ self, ClientChannel },

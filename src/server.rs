@@ -1,13 +1,11 @@
 use std::env;
-use std::collections::HashMap;
 use tokio::task::JoinHandle;
-use tokio::sync::mpsc;
 use anyhow::{ anyhow, Context };
 use sqlx::postgres::PgPoolOptions;
 
 use crate::{
     result::Result,
-    protocol::{ ClientPacket, ServerPacket, User, Channel, Member, ChannelId },
+    protocol::{ ClientPacket, ServerPacket, User, Channel, Member },
     intercom::{ ServerChannel, ClientChannel, Request },
     db::Message,
 };
@@ -66,8 +64,6 @@ impl Server {
             return Err(anyhow!("No ports listening for clients, exiting..."));
         }
 
-        // let mut subscribers: HashMap<ChannelId, Vec<mpsc::UnboundedSender<ServerPacket>>> = HashMap::new();
-
         loop {
             let Some(Request { packet, user }) = self.channel.recv().await else { continue };
             dbg!(&packet);
@@ -93,6 +89,7 @@ impl Server {
                             FROM channels c
                             INNER JOIN channel_members cm ON cm.channel_id = c.id
                             WHERE cm.user_id = $1
+                            AND cm.access
                         ",
                         user.user_id
                     )
@@ -109,13 +106,17 @@ impl Server {
                         .fetch_all(&pool)
                         .await?;
 
-                    reply_tx.send(ServerPacket::ServerData {
+                    let res = reply_tx.send(ServerPacket::ServerData {
                         name: String::from("Cicadas Server"),
                         channels,
                         members,
                     })
                         .await
                         .inspect_err(|e| eprintln!("Unable to send Server data to client {user:?}: {}", e));
+
+                    if res.is_err() {
+                        continue;
+                    }
 
 
                         // id: MessageId,
@@ -137,7 +138,7 @@ impl Server {
                             INNER JOIN users u ON m.author_id = u.user_id
                             WHERE cm.user_id = $1
                             ORDER BY m.timestamp DESC
-                            LIMIT 15
+                            LIMIT 150
                         ",
                         user.user_id
                     )
@@ -154,9 +155,10 @@ impl Server {
                             timestamp: row.timestamp,
                             content: row.content,
                         }; 
-                        reply_tx.send(packet)
-                            .await
-                            .inspect_err(|e| eprintln!("Unable to send NewMessage data to client {user:?}: {}", e));
+                        if let Err(e) = reply_tx.send(packet).await {
+                            eprintln!("Unable to send NewMessage data to client {user:?}: {}", e);
+                            break;
+                        }
                     }
                 }
 
@@ -177,31 +179,7 @@ impl Server {
 
                     let server_packet = msg.to_response( User { name: user.username.clone() });
                     self.channel.send(server_packet);
-
-                    // if let Some(channel_subscribers) = subscribers.get_mut(&channel_id) {
-                    //     let server_packet = msg.to_response( User { name: user.username.clone() });
-                    //     channel_subscribers.retain(|sender| {
-                    //         sender
-                    //             .send(server_packet.clone())
-                    //             .is_ok()
-                    //     });
-                    // }
-
-                    // self.channel.send();
                 }
-
-                // ClientPacket::Subscribe { channel_id, sender } => {
-                //     if let Some(sender) = sender {
-                //         if let Some(send_list) = subscribers.get_mut(&channel_id) {
-                //             send_list.push(sender);
-                //         } else {
-                //             subscribers.insert(channel_id, Vec::from([sender]));
-                //         }
-                //     } else {
-                //         eprintln!("Error: {user:?} sent a subscriber request for channel_id {channel_id} without a sender.");
-                //     }
-                // }
-
                 ClientPacket::LastUpdated { .. } | ClientPacket::AuthToken(_) => { }
             }
 
