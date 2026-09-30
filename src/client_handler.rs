@@ -26,13 +26,13 @@ impl<C: ClientConnection> ClientHandler<C> {
                     .await {
                         Ok(resp) => resp,
                         Err(_e) => {
-                            self.conn.send_error(protocol::Error::ConnectionError, "failed to contact auth-server.");
+                            self.conn.send_error(protocol::Error::ConnectionError, "failed to contact auth-server.").await;
                             return
                         },
                     };
 
                 if !resp.status().is_success() {
-                    self.conn.send_error(protocol::Error::AuthFail, "Unable to authorize token.");
+                    self.conn.send_error(protocol::Error::AuthFail, "Unable to authorize token.").await;
                     return
                 }
 
@@ -43,16 +43,16 @@ impl<C: ClientConnection> ClientHandler<C> {
                     self.channel.send(intercom::Request {
                         packet: ClientPacket::JustConnected(self.channel.get_sender()),
                         user: user.clone(),
-                    });
+                    }).await;
 
-                    self.conn.send(ServerPacket::LoginSuccess { user });
+                    self.conn.send(ServerPacket::LoginSuccess { user }).await;
                 } else {
-                    self.conn.send_error(protocol::Error::AuthFail, "invalid json in response from auth server.");
+                    self.conn.send_error(protocol::Error::AuthFail, "invalid json in response from auth server.").await;
                 }
             }
 
             _ => {
-                self.conn.send_error(protocol::Error::Unauthorized, "Unauthorized.");
+                self.conn.send_error(protocol::Error::Unauthorized, "Unauthorized.").await;
             }
         }
     }
@@ -70,7 +70,7 @@ impl<C: ClientConnection> ClientHandler<C> {
                         self.channel.send(intercom::Request {
                             packet,
                             user: user.clone(),
-                        });
+                        }).await;
 
                     } else {
                         self.handle_unauthorized(packet).await;
@@ -86,7 +86,7 @@ impl<C: ClientConnection> ClientHandler<C> {
                         }
                     };
 
-                    self.conn.send(packet);
+                    self.conn.send(packet).await;
                 }
             }
         }

@@ -85,13 +85,13 @@ impl ServerPort for WsServerPort {
 
 pub struct ClientWsConnection {
     reader: broadcast::Receiver<Option<String>>,
-    sender: mpsc::UnboundedSender<ServerPacket>,
+    sender: mpsc::Sender<ServerPacket>,
     addr: SocketAddr,
 }
 
 impl ClientWsConnection {
     pub fn new(socket: WebSocket, addr: SocketAddr) -> Self {
-        let (sender, recv) = mpsc::unbounded_channel();
+        let (sender, recv) = mpsc::channel(128);
         let (send, reader) = broadcast::channel(100);
 
         let (tcp_tx, tcp_rx) = socket.split();
@@ -126,12 +126,14 @@ impl ClientConnection for ClientWsConnection {
         })
     }
 
-    fn sender(&self) -> mpsc::UnboundedSender<ServerPacket> {
+    fn sender(&self) -> mpsc::Sender<ServerPacket> {
         self.sender.clone()
     }
 
-    fn send(&mut self, packet: ServerPacket) {
-        let _ = self.sender.send(packet);
+    fn send(&mut self, packet: ServerPacket) -> PinBoxFuture<'_, ()> {
+        Box::pin(async move {
+            let _ = self.sender.send(packet).await;
+        })
     }
 
     fn client_id(&self) -> String {
@@ -150,7 +152,7 @@ async fn from_client(channel: broadcast::Sender<Option<String>>, mut reader: Spl
     let _ = channel.send(None);
 }
 
-async fn to_client(mut channel: mpsc::UnboundedReceiver<ServerPacket>, mut writer: SplitSink<WebSocket, Message>) {
+async fn to_client(mut channel: mpsc::Receiver<ServerPacket>, mut writer: SplitSink<WebSocket, Message>) {
     while let Some(packet) = channel.recv().await {
         let Ok(json_str) = serde_json::to_string(&packet) else {
             eprintln!("Unable to serialize packet: {packet:?}");

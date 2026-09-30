@@ -13,15 +13,15 @@ pub struct Request {
 }
 
 pub struct ServerChannel {
-    receiver: mpsc::UnboundedReceiver<Request>,
-    sender_clone: mpsc::UnboundedSender<Request>,
+    receiver: mpsc::Receiver<Request>,
+    sender_clone: mpsc::Sender<Request>,
     sender: broadcast::Sender<ServerPacket>,
 }
 
 impl ServerChannel {
     #[must_use]
     pub fn new() -> Self {
-        let (sender_clone, receiver) = mpsc::unbounded_channel();
+        let (sender_clone, receiver) = mpsc::channel(128);
         let (sender, _) = broadcast::channel(100);
 
         Self { receiver, sender_clone, sender }
@@ -49,7 +49,7 @@ impl Default for ServerChannel {
 
 pub struct ClientChannel {
     pub receiver: broadcast::Receiver<ServerPacket>,
-    pub sender:   mpsc::UnboundedSender<Request>,
+    pub sender:   mpsc::Sender<Request>,
     pub replies:  mpsc::Receiver<ServerPacket>,
 
     reply_sender_model: mpsc::Sender<ServerPacket>,
@@ -57,19 +57,19 @@ pub struct ClientChannel {
 
 impl ClientChannel {
     #[must_use]
-    pub fn new(receiver: broadcast::Receiver<ServerPacket>, sender: mpsc::UnboundedSender<Request>) -> Self {
+    pub fn new(receiver: broadcast::Receiver<ServerPacket>, sender: mpsc::Sender<Request>) -> Self {
         let (reply_sender_model, replies) = mpsc::channel(128);
 
         Self { receiver, sender, replies, reply_sender_model }
     }
 
     #[must_use]
-    pub fn split(self) -> (broadcast::Receiver<ServerPacket>, mpsc::UnboundedSender<Request>) {
+    pub fn split(self) -> (broadcast::Receiver<ServerPacket>, mpsc::Sender<Request>) {
         (self.receiver, self.sender)
     }
 
-    pub fn send(&mut self, packet: Request) {
-        let _ = self.sender.send(packet);
+    pub async fn send(&mut self, packet: Request) {
+        let _ = self.sender.send(packet).await;
     }
 
     /// # Errors
@@ -83,15 +83,15 @@ impl ClientChannel {
                 }
 
                 packet = self.replies.recv() => {
-                    match packet {
-                        Some(packet) => return Ok(packet),
-                        None => continue,
+                    if let Some(packet) = packet {
+                        return Ok(packet);
                     }
                 }
             }
         }
     }
 
+    #[must_use]
     pub fn get_sender(&self) -> mpsc::Sender<ServerPacket> {
         self.reply_sender_model.clone()
     }

@@ -75,13 +75,13 @@ impl ServerPort for TcpServerPort {
 
 pub struct ClientTcpConnection {
     reader: broadcast::Receiver<Option<String>>,
-    sender: mpsc::UnboundedSender<ServerPacket>,
+    sender: mpsc::Sender<ServerPacket>,
     addr: SocketAddr,
 }
 
 impl ClientTcpConnection {
     pub fn new(socket: TcpStream, addr: SocketAddr) -> Self {
-        let (sender, recv) = mpsc::unbounded_channel();
+        let (sender, recv) = mpsc::channel(128);
         let (send, reader) = broadcast::channel(100);
 
         let (tcp_rx, tcp_tx) = socket.into_split();
@@ -101,12 +101,14 @@ impl ClientConnection for ClientTcpConnection {
         })
     }
 
-    fn sender(&self) -> mpsc::UnboundedSender<ServerPacket> {
+    fn sender(&self) -> mpsc::Sender<ServerPacket> {
         self.sender.clone()
     }
 
-    fn send(&mut self, packet: ServerPacket) {
-        let _ = self.sender.send(packet);
+    fn send(&mut self, packet: ServerPacket) -> PinBoxFuture<'_, ()> {
+        Box::pin(async move {
+            let _ = self.sender.send(packet).await;
+        })
     }
 
     fn client_id(&self) -> String {
@@ -137,13 +139,9 @@ async fn from_client(channel: broadcast::Sender<Option<String>>, reader: OwnedRe
     let _ = channel.send(None);
 }
 
-async fn to_client(mut channel: mpsc::UnboundedReceiver<ServerPacket>, mut writer: OwnedWriteHalf) {
+async fn to_client(mut channel: mpsc::Receiver<ServerPacket>, mut writer: OwnedWriteHalf) {
     // todo!("handle scheduled messages to the client")
-    loop {
-        let Some(packet) = channel.recv().await else {
-            // eprintln!("");
-            continue
-        };
+    while let Some(packet) = channel.recv().await {
         let Ok(json_str) = serde_json::to_string(&packet) else {
             eprintln!("Unable to serialize packet: {packet:?}");
             continue;
