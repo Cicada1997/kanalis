@@ -1,5 +1,4 @@
 use crate::{
-    ADDR,
     result::Result,
     server::{ ServerPort },
     client_handler::ClientHandler,
@@ -8,6 +7,7 @@ use crate::{
     intercom::{ ClientChannel },
 };
 
+use anyhow::anyhow;
 use std::{
     net::SocketAddr,
 };
@@ -34,19 +34,31 @@ impl ServerPort for TcpServerPort {
     /// Will return `Err` if the address and port are occupied.
     async fn listen(&self) -> Result<()> {
         println!("Starting tcp port...");
-        let listener = TcpListener::bind(ADDR).await?;
-        println!("listening for raw tcp socket on {ADDR}...");
+        let port: u16 = dotenv::var("KANALIS_TCP_PORT")
+            .map_err(|_e| anyhow!("environment variable 'KANALIS_TCP_PORT' is not set"))?
+            .parse()
+            .map_err(|_e| anyhow!("environment variable 'KANALIS_TCP_PORT' is not an valid port number (a 16 bit unsigned integer)"))?;
+
+        let ip: std::net::IpAddr = dotenv::var("KANALIS_ADDR")
+            .map_err(|_e| anyhow!("environment variable 'KANALIS_ADDR' is not set"))?
+            .parse()
+            .map_err(|_e| anyhow!("KANALIS_ADDR is not a valid IP address"))?;
+
+        let addr = std::net::SocketAddr::new(ip, port);
+
+        let listener = TcpListener::bind(addr).await?;
+        println!("listening for raw tcp socket on {addr}...");
 
         loop {
-            let Ok((socket, addr)) = listener
+            let Ok((socket, client_addr)) = listener
                 .accept()
                 .await
                 .inspect_err(|e| eprintln!("failed to establish client connection: {e}")) 
                 else { continue };
 
-            println!("New connection tcp: {addr}");
+            println!("New connection tcp: {client_addr}");
 
-            let conn = ClientTcpConnection::new(socket, addr);
+            let conn = ClientTcpConnection::new(socket, client_addr);
             let channel = self.client_channel.clone();
 
             tokio::spawn(async move {

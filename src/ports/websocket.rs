@@ -1,5 +1,4 @@
 use crate::{
-    ADDR,
     result::Result,
     connection::{ ClientConnection, PinBoxFuture },
     server::{ ServerPort },
@@ -48,15 +47,17 @@ async fn websocket_handler(ws: WebSocketUpgrade, ConnectInfo(addr): ConnectInfo<
 
 impl ServerPort for WsServerPort {
     fn new(client_channel: ClientChannel) -> Result<Self> {
-        let port: u16 = dotenv::var("WS_PORT")
-            .map_err(|_e| anyhow!("environment variable 'WS_PORT' is not set"))?
+        let port: u16 = dotenv::var("KANALIS_WS_PORT")
+            .map_err(|_e| anyhow!("environment variable 'KANALIS_WS_PORT' is not set"))?
             .parse()
-            .map_err(|_e| anyhow!("environment variable 'WS_PORT' is not an valid port number (a 16 bit unsigned integer)"))?;
+            .map_err(|_e| anyhow!("environment variable 'KANALIS_WS_PORT' is not an valid port number (a 16 bit unsigned integer)"))?;
 
-        let mut addr: SocketAddr = ADDR.parse()
-            .map_err(|_e| anyhow!("ADDR is not a valid socket address"))?;
+        let ip: std::net::IpAddr = dotenv::var("KANALIS_ADDR")
+            .map_err(|_e| anyhow!("environment variable 'KANALIS_ADDR' is not set"))?
+            .parse()
+            .map_err(|_e| anyhow!("KANALIS_ADDR is not a valid IP address"))?;
 
-        addr.set_port(port);
+        let addr = std::net::SocketAddr::new(ip, port);
 
         Ok(Self { client_channel, addr })
     }

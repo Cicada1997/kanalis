@@ -59,7 +59,7 @@ impl Server {
 
         let pool = PgPoolOptions::new()
             .connect(&database_url).await?;
-
+        
         if self.serverports.is_empty() {
             return Err(anyhow!("No ports listening for clients, exiting..."));
         }
