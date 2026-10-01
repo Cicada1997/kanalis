@@ -22,6 +22,16 @@ pub enum ClientPacket {
     AuthToken(String),
     #[serde(skip)]
     JustConnected(mpsc::Sender<ServerPacket>),
+    #[serde(skip)]
+    Disconnected,
+    GetChannelMessages {
+        channel_id: ChannelId,
+        before: Option<MessageId>,
+    },
+    CreateChannel {
+        name: String,
+        private: bool,
+    },
     LastUpdated {
         datetime: String, // DateTime<Utc>, 
         // #[serde(skip)]
@@ -85,7 +95,6 @@ pub enum ServerPacket {
         timestamp: NaiveDateTime,
         content: String,
     },
-
 
     // results //
     LoginSuccess {

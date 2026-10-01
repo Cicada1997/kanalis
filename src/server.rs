@@ -4,12 +4,13 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use std::collections::HashMap;
 use anyhow::{ anyhow, Context };
-use sqlx::postgres::{ PgPool, PgPoolOptions };
+use sqlx::postgres::{ PgPoolOptions };
 
 use crate::{
     result::Result,
-    protocol::{ ClientPacket, ServerPacket, UserDetails, UserId, User, Channel, Member },
+    protocol::{ ClientPacket, ServerPacket, UserId, User },
     intercom::{ ServerChannel, ClientChannel, Request },
+    packet_handling::{ just_connected, send_messages_before },
     db::Message,
 };
 
@@ -18,98 +19,6 @@ pub struct Server {
     // db: Box<dyn Database + Send + Sync>,
     serverports: Vec<JoinHandle<()>>,
     active_users: Arc<RwLock<HashMap<UserId, tokio::sync::mpsc::Sender<ServerPacket>>>>,
-}
-
-/// # Errors
-/// Accumulates the errors from database and client interactions when building and sending a
-/// `ServerData` packet.
-pub async fn just_connected(user: &UserDetails, output: tokio::sync::mpsc::Sender<ServerPacket>, pool: PgPool) -> Result<()> {
-    let _ = sqlx::query!(
-        "
-            INSERT INTO users (user_id, username)
-            VALUES ($1, $2)
-            ON CONFLICT (user_id) DO NOTHING
-        ",
-        user.user_id,
-        user.username,
-    )
-        .execute(&pool)
-        .await?;
-
-    let channels = sqlx::query_as!(
-        Channel,
-        "
-            SELECT c.id, c.name
-            FROM channels c
-            INNER JOIN channel_members cm ON cm.channel_id = c.id
-            WHERE cm.user_id = $1
-            AND cm.access
-        ",
-        user.user_id
-    )
-        .fetch_all(&pool)
-        .await?;
-
-    let members = sqlx::query_as!(
-        Member,
-        "
-            SELECT users.user_id, users.username
-            FROM users
-        "
-    )
-        .fetch_all(&pool)
-        .await?;
-
-    let res = output.send(ServerPacket::ServerData {
-        name: String::from("Cicadas Server"),
-        channels,
-        members,
-    })
-        .await;
-        // .inspect_err(|e| eprintln!("Unable to send Server data to client {user:?}: {e}"));
-
-    if let Err(e) = res {
-        eprintln!("An error occured while transmitting data internally to the client handler: {e} (recipient: {user:?})");
-        return Ok(())
-    }
-
-    let mut rows = sqlx::query!(
-        "
-            SELECT 
-                m.id, 
-                u.username AS name, 
-                m.channel_id, 
-                m.timestamp, 
-                m.content
-            FROM messages m
-            INNER JOIN channel_members cm ON cm.channel_id = m.channel_id
-            INNER JOIN users u ON m.author_id = u.user_id
-            WHERE cm.user_id = $1
-            ORDER BY m.timestamp DESC
-            LIMIT 150
-        ",
-        user.user_id
-    )
-        .fetch_all(&pool)
-        .await?;
-
-    rows.reverse();
-    
-    for row in rows {
-        let packet = ServerPacket::NewMessage {
-            id: row.id,
-            user: User { name: row.name },
-            channel_id: row.channel_id,
-            timestamp: row.timestamp,
-            content: row.content,
-        }; 
-        if let Err(e) = output.send(packet).await {
-            eprintln!("Unable to send NewMessage data to client {user:?}: {e}");
-            break;
-        }
-    }
-    
-    Ok(())
 }
 
 impl Server {
@@ -178,7 +87,7 @@ impl Server {
                             let pool = pool.clone();
                             let err_sender = err_sender.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = just_connected(&user, reply_tx, pool).await {
+                                if let Err(e) = just_connected(pool, reply_tx, &user).await {
                                     let _ = err_sender.send(e).await;
                                 }
                             });
@@ -202,6 +111,47 @@ impl Server {
                             let server_packet = msg.to_response( User { name: user.username.clone() });
                             self.channel.send(server_packet);
                         }
+                        ClientPacket::GetChannelMessages { channel_id, before }  => {
+                            // TODO: implement cache
+                            let pool = pool.clone();
+                            let active_users = self.active_users.clone();
+                            tokio::spawn(async move {
+                                if let Some(reply_tx) = active_users.read().await.get(&user.user_id) {
+                                    send_messages_before(pool, reply_tx.clone(), channel_id, before, &user).await;
+                                } else {
+                                    eprintln!("Unable to find user channel in active_users: {user:?}");
+                                }
+                            });
+                        }
+
+                        ClientPacket::Disconnected => {
+                            self.active_users.write().await.remove(&user.user_id);
+                            println!("User Disconnected: {}", user.username);
+                        }
+
+                        ClientPacket::CreateChannel { name, private } => {
+                            if !user.admin {
+                                continue;
+                            }
+
+                            // TODO: handle name conflicts
+
+                            sqlx::query!(
+                                "
+                                    INSERT INTO channels (
+                                        name,
+                                        private
+                                    )
+                                    VALUES ($1, $2)
+                                    ON CONFLICT (name) DO NOTHING
+                                ",
+                                name,
+                                private,
+                            )
+                                .execute(&pool)
+                                .await?;
+                        }
+
                         ClientPacket::LastUpdated { .. } | ClientPacket::AuthToken(_) => { }
                     }
 
