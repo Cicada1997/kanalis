@@ -129,6 +129,28 @@ impl Server {
                             println!("User Disconnected: {}", user.username);
                         }
 
+                        // ClientPacket::DeleteChannel { channel_id } => {
+                        //     if !user.admin {
+                        //         continue;
+                        //     }
+                        //
+                        //     let mut tx = pool.begin().await?;
+                        //
+                        //     sqlx::query!("DELETE FROM messages WHERE channel_id = $1", channel_id)
+                        //         .execute(&mut *tx)
+                        //         .await?;
+                        //
+                        //     sqlx::query!("DELETE FROM channel_members WHERE channel_id = $1", channel_id)
+                        //         .execute(&mut *tx)
+                        //         .await?;
+                        //
+                        //     sqlx::query!("DELETE FROM channels WHERE id = $1", channel_id)
+                        //         .execute(&mut *tx)
+                        //         .await?;
+                        //
+                        //     tx.commit().await?;
+                        // }
+
                         ClientPacket::CreateChannel { name, private } => {
                             if !user.admin {
                                 continue;

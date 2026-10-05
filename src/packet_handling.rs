@@ -37,9 +37,14 @@ pub async fn just_connected(
         "
             SELECT c.id, c.name
             FROM channels c
-            INNER JOIN channel_members cm ON cm.channel_id = c.id
-            WHERE cm.user_id = $1
-            AND cm.access
+            WHERE c.private = false
+            OR EXISTS (
+                SELECT 1
+                FROM channel_members cm
+                WHERE cm.channel_id = c.id
+                AND   cm.user_id = $1
+                AND   cm.access = true
+            )
         ",
         user.user_id
     )
