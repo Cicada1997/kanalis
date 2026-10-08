@@ -1,11 +1,16 @@
-use crate::protocol::{ MessageId, User, Member, Channel, ChannelId, UserDetails, ClientPacket, ServerPacket, Error };
-use crate::ui::CreateChannelModal;
+use crate::ui::{ self, CreateChannelModal };
 use crate::net::ConnEvent;
 
-use std::collections::HashMap;
-use tokio::sync::mpsc;
+use protocol::{ MessageId, User, Member, Channel, ChannelId, kattauth::UserDetails, ClientPacket, ServerPacket };
+
+use std::collections::{ HashMap };
+
+use tokio::sync::{ mpsc };
 use serde::{ Serialize, Deserialize };
 use chrono::naive::NaiveDateTime;
+use regex::Regex;
+ 
+use iced::widget::image;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
@@ -31,6 +36,7 @@ impl ChannelMessages {
         self.sort();
     }
 
+    #[allow(unused)]
     pub fn extend(&mut self, messages: &[Message]) {
         self.messages.extend(messages.iter().cloned());
         self.sort();
@@ -41,6 +47,7 @@ impl ChannelMessages {
         self.messages.push(message);
     }
 
+    #[allow(unused)]
     pub fn try_sort(&mut self) {
         if !self.sorted {
             self.sort();
@@ -107,6 +114,7 @@ pub struct State {
     pub user: Option<UserDetails>,
     pub current_channel: ChannelId,
     pub current_message: String,
+    pub image_cache: HashMap<String, image::Handle>,
 
     // UI Components
     pub create_channel_modal: Option<CreateChannelModal>,
@@ -137,6 +145,7 @@ impl Default for State {
             user: None,
             current_channel: 0,
             current_message: String::new(),
+            image_cache: HashMap::new(),
 
             create_channel_modal: None,
 
@@ -151,7 +160,9 @@ impl Default for State {
 }
 
 impl State {
-    pub fn apply_conn_event(&mut self, event: ConnEvent) {
+    pub fn apply_conn_event(&mut self, event: ConnEvent) -> iced::Task<ui::Message> {
+        let mut tasks = vec![];
+
         match event {
             ConnEvent::Connecting => {
                 self.auth_status = AuthStatus::Waiting;
@@ -164,18 +175,23 @@ impl State {
                 self.sender = None;
             }
             ConnEvent::Exit(reason) => {
-                println!("exiting with reason: {reason:?}");
+                println!("exiting with reason: {:?}", reason);
                 std::process::exit(0)
             },
-            ConnEvent::Packet(packet) => self.handle_server_packet(packet),
+            ConnEvent::Packet(packet) => {
+                tasks.push(self.handle_server_packet(packet));
+            }
         }
+
+        iced::Task::batch(tasks)
     }
 
-    fn handle_server_packet(&mut self, packet: ServerPacket) {
-        dbg!(&packet);
+    fn handle_server_packet(&mut self, packet: ServerPacket) -> iced::Task<ui::Message> {
+        let mut tasks = vec![];
+
         match packet {
             ServerPacket::ServerData { name, channels, members } => {
-                println!("Server name is {name}");
+                println!("Server name is {}", name);
                 if let Some(first_channel) = channels.first() {
                     self.switch_channel(first_channel.id);
                 }
@@ -187,16 +203,35 @@ impl State {
                 self.user = Some(user);
             }
             ServerPacket::NewMessage { id, user, channel_id, timestamp, content } => {
+                let regex = Regex::new(r"<image:(.*)>").unwrap();
+                for caps in regex.captures_iter(&content) {
+                    if let Some(m) = caps.get(1) {
+                        let url = m.as_str().to_string();
+                        if !self.image_cache.contains_key(&url) {
+                            let url_clone = url.clone();
+                            tasks.push(iced::Task::perform(
+                                async move {
+                                    reqwest::get(&url.clone()).await.ok()?
+                                        .bytes().await.ok()
+                                        .map(|b| b.to_vec())
+                                },
+                                move |bytes| ui::Message::ImageLoaded(url_clone, bytes)
+                            ));
+                        }
+                    }
+                }
                 self.messages.push(Message { id, user, channel_id, content, timestamp });
             }
             ServerPacket::Error { code, reason } => {
-                if matches!(code, Error::AuthFail) {
+                if matches!(code, protocol::Error::AuthFail) {
                     eprintln!("Invalid token. Restart with a working one.");
                 } else {
-                    eprintln!("Error: {code:?}: {reason}");
+                    eprintln!("Error: {:?}: {}", code, reason);
                 }
             }
         }
+
+        iced::Task::batch(tasks)
     }
 
     fn fetch_messages(&mut self, channel_id: ChannelId) {
@@ -204,7 +239,7 @@ impl State {
             let _ = sender.try_send(ClientPacket::GetChannelMessages {
                 channel_id: channel_id,
                 before: None,
-            }).inspect_err( |e| eprintln!("{e:?}") );
+            }).inspect_err( |e| eprintln!("{:?}", e) );
         } else { eprintln!("ERROR [fetch_messages()]: THIS FUNCTION IS UNREACHABLE AND SHOULD NOT BE USED WHEN A SENDER IS NOT SET") }
     }
 
@@ -226,7 +261,7 @@ impl State {
 
             match sender.try_send(packet) {
                 Ok(()) => self.current_message.clear(),
-                Err(e) => eprintln!("Failed to send message: {e}"),
+                Err(e) => eprintln!("Failed to send message: {}", e),
             }
         } else {
             eprintln!("Unable to send message, sender is not yet defined.");
@@ -242,7 +277,7 @@ impl State {
 
         let client = reqwest::blocking::Client::new();
         let res = client.post("https://auth.kattmys.se/login")
-            .json(&crate::protocol::kattauth::LoginDetails {
+            .json(&protocol::kattauth::LoginDetails {
                 username,
                 hashword,
             })

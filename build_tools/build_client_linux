@@ -1,0 +1,14 @@
+#!/bin/bash
+
+mkdir -p export
+
+cargo build -p client --release
+mkdir unique_export_linux_client
+cp target/release/client unique_export_linux_client/
+cp -r assets unique_export_linux_client/
+
+touch unique_export_linux_client/.env
+echo "HOST=cicada.kattmys.se:1997" >> unique_export_linux_client/.env
+
+7z a export/client_export_linux.7z unique_export_linux_client
+rm -r unique_export_linux_client

@@ -1,4 +1,4 @@
-use crate::protocol::{ ClientPacket, ServerPacket };
+use protocol::{ ClientPacket, ServerPacket };
 
 use tokio::sync::mpsc;
 use tokio::net::tcp::OwnedWriteHalf;
@@ -8,7 +8,6 @@ use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 
 use iced::futures::sink::SinkExt;
-// use iced::futures::Stream;
 use iced::stream;
 use iced::Subscription;
 

@@ -1,0 +1,17 @@
+#!/bin/bash
+
+mkdir -p export
+
+cargo build -p client --release --target x86_64-pc-windows-gnu
+mkdir unique_export_windows_client
+cp target/release/client.exe unique_export_windows_client/
+cp -r assets unique_export_windows_client/
+
+# touch unique_export_windows_client/.env
+# echo "HOST=cicada.kattmys.se:1997" >> unique_export_windows_client/.env
+
+touch unique_export_windows_client/run.ps1
+echo "\$env:HOST = \"cicada.kattmys.se:1997\"\n.\kanalis_desktop.exe" >> unique_export_windows_client/run.ps1
+
+7z a export/client_export_windows.7z unique_export_windows_client
+rm -r unique_export_windows_client

@@ -1,13 +1,14 @@
 pub mod create_channel_modal;
 
-pub use create_channel_modal::CreateChannelModal; // Fixed typo
+pub use create_channel_modal::CreateChannelModal; 
 
 use crate::state::{ self, State, AuthStatus };
-use crate::protocol::{ ChannelId, ClientPacket };
 use crate::net::ConnEvent;
 
-use iced::widget::{ text, text_input, button, column, row, scrollable };
-use iced::{ Fill, Length, Element, Color, Background, };
+use regex::Regex;
+use protocol::{ ChannelId, ClientPacket };
+use iced::widget::{ text, text_input, button, column, row, scrollable, Row, container, image };
+use iced::{ Fill, Length, Element, Color, Background, Alignment };
 
 #[derive(Clone)]
 pub enum Message {
@@ -23,15 +24,18 @@ pub enum Message {
     UpdateLoginPassword(String),
 
     ShowCreateChannel,
-    // Add a wrapper for the modal's internal messages
     ModalMessage(create_channel_modal::Message),
+    
+    ImageLoaded(String, Option<Vec<u8>>),
 }
 
-pub fn update(state: &mut State, event: Message) {
+pub fn update(state: &mut State, event: Message) -> iced::Task<Message> {
+    let mut tasks = vec![];
+    
     match event {
-        Message::ConnMessage(conn_event) => state.apply_conn_event(conn_event),
+        Message::ConnMessage(conn_event) => tasks.push(state.apply_conn_event(conn_event)),
+        
         Message::SwitchChannel(id) => state.switch_channel(id),
-
         Message::UpdateMessage(msg) => state.current_message = msg,
         Message::SendMessage => state.send_current_message(),
 
@@ -61,13 +65,20 @@ pub fn update(state: &mut State, event: Message) {
                 }
             }
         }
+
+        Message::ImageLoaded(url, Some(bytes)) => {
+            let handle = iced::widget::image::Handle::from_bytes(bytes);
+            state.image_cache.insert(url, handle);
+        }
+        Message::ImageLoaded(_, None) => {}
     }
+
+    iced::Task::batch(tasks)
 }
 
 #[must_use]
 pub fn view(state: &State) -> Element<'_, Message> {
     if let Some(modal) = &state.create_channel_modal {
-        // Map the child's messages to the parent's message enum
         modal.view().map(Message::ModalMessage)
     } else {
         match state.auth_status {
@@ -158,14 +169,74 @@ fn sidebar(state: &State) -> Element<'_, Message> {
     ).into()
 }
 
-fn message(message: &state::Message) -> Element<'_, Message> {
-    column![
-        row![
-            text(&message.user.name).color(iced::Color::from_rgb(0.5, 0.5, 1.0)),
-            text(format!("{:?}", message.timestamp)).size(12),
-        ].spacing(10),
-        text(&message.content),
-    ].into()
+use std::sync::LazyLock;
+
+static IMAGE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<image:([^>]*)>").unwrap());
+
+
+fn message<'a>(state: &'a State, message: &'a state::Message) -> Element<'a, Message> {
+    // Bilderna
+    let images: Vec<Element<'a, Message>> = IMAGE_RE
+        .captures_iter(&message.content)
+        .filter_map(|caps| caps.get(1))
+        // .filter_map(
+        .map(|m| {
+            // match state.image_cache.get(m.as_str()) {
+            // Some(handle) => {
+            state.image_cache.get(m.as_str())
+                .and_then(|handle| {
+                    Some(
+                        image(handle.clone())
+                            .width(Length::Fixed(200.0))
+                            .border_radius(8)
+                    )
+                })
+                .unwrap_or(
+                    image("assets/loading_image.png")
+                        .width(Length::Fixed(20.0))
+                        .border_radius(8)
+                )
+                .into()
+        })
+        .collect();
+
+    let clean_text = IMAGE_RE
+        .replace_all(&message.content, "")
+        .trim()
+        .to_string();
+
+    let timestamp = message.timestamp
+        // .and_local_timezone(tz)
+        // .unwrap()
+        .format("%Y.%m.%d kl %H")
+        .to_string();
+    
+
+    let header = row![
+        text(&message.user.name)
+            .size(15)
+            .color(Color::from_rgb(0.5, 0.5, 1.0)),
+        text(timestamp)
+            .size(12)
+            .color(Color::from_rgb(0.55, 0.55, 0.55)),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center);
+
+    let mut body = column![header].spacing(4);
+
+    if !clean_text.is_empty() {
+        body = body.push(text(clean_text).size(15));
+    }
+
+    if !images.is_empty() {
+        body = body.push(Row::with_children(images).spacing(8));
+    }
+
+    container(body)
+        .padding([8, 12])
+        .width(Length::Fill)
+        .into()
 }
 
 fn chat_history(state: &State) -> Element<'_, Message> {
@@ -174,7 +245,7 @@ fn chat_history(state: &State) -> Element<'_, Message> {
     if let Some(messages) = state.messages.get(state.current_channel) {
         history = messages
             .iter()
-            .map(message)
+            .map(|m| message(state, m))
             .collect();
     }
 
