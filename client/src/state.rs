@@ -13,7 +13,7 @@ use regex::Regex;
 use iced::widget::image;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Message {
+pub struct ChatMessage {
     pub id: MessageId,
     pub user: User,
     pub channel_id: ChannelId,
@@ -22,27 +22,27 @@ pub struct Message {
 }
 
 struct ChannelMessages {
-    messages: Vec<Message>,
+    messages: Vec<ChatMessage>,
     sorted: bool,
 }
 
 impl ChannelMessages {
-    pub fn get(&self) -> &[Message] {
+    pub fn get(&self) -> &[ChatMessage] {
         return self.messages.as_slice();
     }
 
-    pub fn push(&mut self, message: Message) {
+    pub fn push(&mut self, message: ChatMessage) {
         self.messages.push(message);
         self.sort();
     }
 
     #[allow(unused)]
-    pub fn extend(&mut self, messages: &[Message]) {
+    pub fn extend(&mut self, messages: &[ChatMessage]) {
         self.messages.extend(messages.iter().cloned());
         self.sort();
     }
 
-    pub fn push_unchecked(&mut self, message: Message) {
+    pub fn push_unchecked(&mut self, message: ChatMessage) {
         self.sorted = false;
         self.messages.push(message);
     }
@@ -68,17 +68,17 @@ pub struct MessageHistory {
 impl MessageHistory {
     pub fn new() -> Self { Self::default() }
 
-    pub fn get(&self, channel_id: ChannelId) -> Option<&[Message]> {
+    pub fn get(&self, channel_id: ChannelId) -> Option<&[ChatMessage]> {
         self.channels.get(&channel_id).map(|ch| ch.get())
     }
 
-    pub fn push(&mut self, message: Message) {
+    pub fn push(&mut self, message: ChatMessage) {
         self.channels.entry(message.channel_id)
             .or_insert_with(|| ChannelMessages { messages: vec![], sorted: true })
             .push(message);
     }
 
-    pub fn push_unchecked(&mut self, message: Message) {
+    pub fn push_unchecked(&mut self, message: ChatMessage) {
         if let Some(ch) = self.channels.get_mut(&message.channel_id) {
             ch.push_unchecked(message);
         } else {
@@ -89,7 +89,7 @@ impl MessageHistory {
         }
     }
 
-    pub fn extend(&mut self, messages: &[Message]) {
+    pub fn extend(&mut self, messages: &[ChatMessage]) {
         for message in messages {
             self.channels.entry(message.channel_id)
                 .or_insert_with(|| ChannelMessages { messages: vec![], sorted: true })
@@ -97,7 +97,7 @@ impl MessageHistory {
         }
     }
 
-    pub fn extend_unchecked(&mut self, messages: &[Message], id: ChannelId) {
+    pub fn extend_unchecked(&mut self, messages: &[ChatMessage], id: ChannelId) {
         let ch = self.channels.entry(id)
             .or_insert_with(|| ChannelMessages { messages: vec![], sorted: true });
         
@@ -220,7 +220,7 @@ impl State {
                         }
                     }
                 }
-                self.messages.push(Message { id, user, channel_id, content, timestamp });
+                self.messages.push(ChatMessage { id, user, channel_id, content, timestamp });
             }
             ServerPacket::Error { code, reason } => {
                 if matches!(code, protocol::Error::AuthFail) {

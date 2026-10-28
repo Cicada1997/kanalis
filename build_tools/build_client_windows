@@ -4,7 +4,7 @@ mkdir -p export
 
 cargo build -p client --release --target x86_64-pc-windows-gnu
 mkdir unique_export_windows_client
-cp target/release/client.exe unique_export_windows_client/
+cp target/x86_64-pc-windows-gnu/release/client.exe unique_export_windows_client/
 cp -r assets unique_export_windows_client/
 
 # touch unique_export_windows_client/.env
