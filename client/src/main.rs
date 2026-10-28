@@ -1,6 +1,8 @@
 pub mod state;
 pub mod ui;
 pub mod net;
+pub mod auth;
+pub mod message_history;
 
 use ui::{ update, view };
 use net::{ connect };

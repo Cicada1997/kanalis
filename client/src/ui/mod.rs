@@ -1,16 +1,17 @@
 pub mod create_channel_modal;
 pub mod channel_bar;
 pub mod chat;
+pub mod auth;
 
 pub use create_channel_modal::CreateChannelModal; 
 
-use crate::state::{ self, State, AuthStatus };
+use crate::state::{ State, AuthStatus };
 use crate::net::ConnEvent;
 
-use regex::Regex;
 use protocol::{ ChannelId, ClientPacket };
-use iced::widget::{ text, text_input, button, column, row, scrollable, Row, container, image };
-use iced::{ Fill, Length, Element, Color, Background, Alignment };
+
+use iced::widget::text;
+use iced::{ Task, Length, Element };
 
 #[derive(Clone)]
 pub enum Message {
@@ -21,32 +22,61 @@ pub enum Message {
 
     ConnMessage(ConnEvent),
 
-    SubmitLogin,
-    UpdateLoginUsername(String),
-    UpdateLoginPassword(String),
-
     ShowCreateChannel,
     ModalMessage(create_channel_modal::Message),
+
+    LoginMessage(auth::LoginMessage),
+    LoginResult(Result<String, String>),
     
     ImageLoaded(String, Option<Vec<u8>>),
 }
 
-pub fn update(state: &mut State, event: Message) -> iced::Task<Message> {
-    let mut tasks = vec![];
-    
+pub fn update(state: &mut State, event: Message) -> Task<Message> {
     match event {
-        Message::ConnMessage(conn_event) => tasks.push(state.apply_conn_event(conn_event)),
+        Message::ConnMessage(conn_event) => state.apply_conn_event(conn_event),
         
-        Message::SwitchChannel(id) => state.switch_channel(id),
-        Message::UpdateMessage(msg) => state.current_message = msg,
-        Message::SendMessage => state.send_current_message(),
+        Message::SwitchChannel(id) => {
+            state.switch_channel(id);
+            Task::none()
+        }
+        Message::UpdateMessage(msg) => {
+            state.current_message = msg;
+            Task::none()
+        }
+        Message::SendMessage => {
+            state.send_current_message();
+            Task::none()
+        }
 
-        Message::UpdateLoginUsername(txt) => state.username_input_field = txt,
-        Message::UpdateLoginPassword(txt) => state.password_input_field = txt,
-        Message::SubmitLogin => state.submit_login(),
+        Message::LoginMessage(login_msg) => {
+            match state.auth.update(login_msg) {
+                auth::Action::Run(task) => task.map(Message::from),
+                auth::Action::Login { username, password } => {
+                    state.auth_status = AuthStatus::Waiting;
+                    Task::perform(
+                        crate::auth::login(username, password),
+                        Message::LoginResult
+                    )
+                }
+                auth::Action::None => Task::none(),
+            }
+        }
+
+        Message::LoginResult(Ok(token)) => {
+            state.current_token = Some(token);
+            state.auth_status = AuthStatus::LoggedIn;
+            Task::none()
+        }
+         
+        Message::LoginResult(Err(_reason)) => {
+            state.auth_status = AuthStatus::LoggedOut;
+            Task::none()
+        }
+
 
         Message::ShowCreateChannel => {
             state.create_channel_modal = Some(CreateChannelModal::default());
+            Task::none()
         }
         
         Message::ModalMessage(modal_msg) => {
@@ -66,18 +96,18 @@ pub fn update(state: &mut State, event: Message) -> iced::Task<Message> {
                     create_channel_modal::Action::None => {}
                 }
             }
+            Task::none()
         }
 
         Message::ImageLoaded(url, Some(bytes)) => {
             let handle = iced::widget::image::Handle::from_bytes(bytes);
             state.image_cache.insert(url, handle);
+            Task::none()
         }
 
         // TODO: reload with "not-found" image
-        Message::ImageLoaded(_, None) => {}
+        Message::ImageLoaded(_, None) => Task::none()
     }
-
-    iced::Task::batch(tasks)
 }
 
 #[must_use]
@@ -88,7 +118,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         match state.auth_status {
             AuthStatus::LoggedIn => chat::server_view(state),
             AuthStatus::Waiting => waiting_view(state),
-            AuthStatus::LoggedOut => login_view(state),
+            AuthStatus::LoggedOut => state.auth.view(),
         }
     }
 }
@@ -101,30 +131,5 @@ pub fn waiting_view(_state: &State) -> Element<'_, Message> {
         .width(Length::FillPortion(1))
         .height(Length::FillPortion(1))
         .center()
-        .into()
-}
-
-#[must_use]
-pub fn login_view(state: &State) -> Element<'_, Message> {
-    column![
-        text("Log in"),
-        login_field(state)
-    ]
-        .padding(250)
-        .into()
-}
-
-fn login_field(state: &State) -> Element<'_, Message> {
-    column![
-        text_input("Användarnamn...", &state.username_input_field)
-            .on_input(Message::UpdateLoginUsername),
-        text_input("Lösenord...", &state.password_input_field)
-            .on_input(Message::UpdateLoginPassword)
-            .on_submit(Message::SubmitLogin),
-        button("logga in")
-            .on_press(Message::SubmitLogin)
-    ]
-        .width(Fill)
-        .height(Fill)
         .into()
 }

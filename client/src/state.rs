@@ -1,4 +1,5 @@
 use crate::ui::{ self, CreateChannelModal };
+use crate::ui::auth::{ AuthComponent };
 use crate::net::ConnEvent;
 
 use protocol::{ MessageId, User, Member, Channel, ChannelId, kattauth::UserDetails, ClientPacket, ServerPacket };
@@ -11,6 +12,22 @@ use chrono::naive::NaiveDateTime;
 use regex::Regex;
  
 use iced::widget::image;
+use iced::Task;
+
+use std::sync::LazyLock;
+
+pub static IMAGE_TAG: LazyLock<Regex> = LazyLock::new(||
+    Regex::new(r"<image:([^>]+)>")
+        .unwrap()
+);
+                
+#[derive(Debug, Default)]
+pub enum AuthStatus {
+    LoggedIn,
+    Waiting,
+    #[default]
+    LoggedOut,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -21,91 +38,9 @@ pub struct ChatMessage {
     pub timestamp: NaiveDateTime,
 }
 
-struct ChannelMessages {
-    messages: Vec<ChatMessage>,
-    sorted: bool,
-}
-
-impl ChannelMessages {
-    pub fn get(&self) -> &[ChatMessage] {
-        return self.messages.as_slice();
-    }
-
-    pub fn push(&mut self, message: ChatMessage) {
-        self.messages.push(message);
-        self.sort();
-    }
-
-    #[allow(unused)]
-    pub fn extend(&mut self, messages: &[ChatMessage]) {
-        self.messages.extend(messages.iter().cloned());
-        self.sort();
-    }
-
-    pub fn push_unchecked(&mut self, message: ChatMessage) {
-        self.sorted = false;
-        self.messages.push(message);
-    }
-
-    #[allow(unused)]
-    pub fn try_sort(&mut self) {
-        if !self.sorted {
-            self.sort();
-        }
-    }
-
-    fn sort(&mut self) {
-        self.messages.sort_by(|m1, m2| m1.timestamp.cmp(&m2.timestamp));
-        self.sorted = true;
-    }
-}
+use crate::message_history::*;
 
 #[derive(Default)]
-pub struct MessageHistory {
-    channels: HashMap<ChannelId, ChannelMessages>
-}
-
-impl MessageHistory {
-    pub fn new() -> Self { Self::default() }
-
-    pub fn get(&self, channel_id: ChannelId) -> Option<&[ChatMessage]> {
-        self.channels.get(&channel_id).map(|ch| ch.get())
-    }
-
-    pub fn push(&mut self, message: ChatMessage) {
-        self.channels.entry(message.channel_id)
-            .or_insert_with(|| ChannelMessages { messages: vec![], sorted: true })
-            .push(message);
-    }
-
-    pub fn push_unchecked(&mut self, message: ChatMessage) {
-        if let Some(ch) = self.channels.get_mut(&message.channel_id) {
-            ch.push_unchecked(message);
-        } else {
-            self.channels.insert(message.channel_id, ChannelMessages {
-                messages: vec![message],
-                sorted: true,
-            });
-        }
-    }
-
-    pub fn extend(&mut self, messages: &[ChatMessage]) {
-        for message in messages {
-            self.channels.entry(message.channel_id)
-                .or_insert_with(|| ChannelMessages { messages: vec![], sorted: true })
-                .push(message.clone());
-        }
-    }
-
-    pub fn extend_unchecked(&mut self, messages: &[ChatMessage], id: ChannelId) {
-        let ch = self.channels.entry(id)
-            .or_insert_with(|| ChannelMessages { messages: vec![], sorted: true });
-        
-        ch.messages.extend(messages.iter().cloned());
-        ch.sorted = false;
-    }
-}
-
 pub struct State {
     // Chat Data
     pub channels: Vec<Channel>,
@@ -118,6 +53,7 @@ pub struct State {
 
     // UI Components
     pub create_channel_modal: Option<CreateChannelModal>,
+    pub auth: AuthComponent,
 
     // Connection
     pub sender: Option<mpsc::Sender<ClientPacket>>,
@@ -129,66 +65,40 @@ pub struct State {
     pub password_input_field: String,
 }
 
-#[derive(Debug)]
-pub enum AuthStatus {
-    LoggedIn,
-    Waiting,
-    LoggedOut,
-}
-
-impl Default for State {
-    fn default() -> Self {
+impl State {
+    pub fn new() -> Self {
         Self {
-            channels: vec![],
-            members: vec![],
-            messages: MessageHistory::new(),
-            user: None,
-            current_channel: 0,
-            current_message: String::new(),
-            image_cache: HashMap::new(),
-
-            create_channel_modal: None,
-
-            sender: None,
-
             current_token: dotenv::var("TOKEN").ok(),
-            auth_status: AuthStatus::LoggedOut,
-            username_input_field: String::new(),
-            password_input_field: String::new(),
+            ..Default::default()
         }
     }
 }
 
 impl State {
-    pub fn apply_conn_event(&mut self, event: ConnEvent) -> iced::Task<ui::Message> {
-        let mut tasks = vec![];
-
+    pub fn apply_conn_event(&mut self, event: ConnEvent) -> Task<ui::Message> {
         match event {
             ConnEvent::Connecting => {
                 self.auth_status = AuthStatus::Waiting;
+                Task::none()
             }
             ConnEvent::Connected(sender) => {
                 self.sender = Some(sender);
+                Task::none()
             }
             ConnEvent::Disconnected => {
                 println!("Disconnected from server");
                 self.sender = None;
+                Task::none()
             }
             ConnEvent::Exit(reason) => {
                 println!("exiting with reason: {:?}", reason);
                 std::process::exit(0)
             },
-            ConnEvent::Packet(packet) => {
-                tasks.push(self.handle_server_packet(packet));
-            }
+            ConnEvent::Packet(packet) => self.handle_server_packet(packet)
         }
-
-        iced::Task::batch(tasks)
     }
 
     fn handle_server_packet(&mut self, packet: ServerPacket) -> iced::Task<ui::Message> {
-        let mut tasks = vec![];
-
         match packet {
             ServerPacket::ServerData { name, channels, members } => {
                 println!("Server name is {}", name);
@@ -197,14 +107,27 @@ impl State {
                 }
                 self.channels = channels;
                 self.members = members;
+
+                for member in self.members.iter() {
+                    dbg!(member);
+                }
+
+                Task::none()
             }
+
             ServerPacket::LoginSuccess { user } => {
                 self.auth_status = AuthStatus::LoggedIn;
                 self.user = Some(user);
+
+                Task::none()
             }
+
             ServerPacket::NewMessage { id, user, channel_id, timestamp, content } => {
-                let regex = Regex::new(r"<image:(.*)>").unwrap();
-                for caps in regex.captures_iter(&content) {
+                // Scanning for images
+                let mut tasks = vec![];
+
+                // loading found image tags asynchronously
+                for caps in IMAGE_TAG.captures_iter(&content) {
                     if let Some(m) = caps.get(1) {
                         let url = m.as_str().to_string();
                         if !self.image_cache.contains_key(&url) {
@@ -221,6 +144,7 @@ impl State {
                     }
                 }
                 self.messages.push(ChatMessage { id, user, channel_id, content, timestamp });
+                iced::Task::batch(tasks)
             }
             ServerPacket::Error { code, reason } => {
                 if matches!(code, protocol::Error::AuthFail) {
@@ -228,10 +152,9 @@ impl State {
                 } else {
                     eprintln!("Error: {:?}: {}", code, reason);
                 }
+                Task::none()
             }
         }
-
-        iced::Task::batch(tasks)
     }
 
     fn fetch_messages(&mut self, channel_id: ChannelId) {
@@ -265,39 +188,6 @@ impl State {
             }
         } else {
             eprintln!("Unable to send message, sender is not yet defined.");
-        }
-    }
-
-    pub fn submit_login(&mut self) {
-        let username = self.username_input_field.clone();
-        let hashword = self.password_input_field.clone();
-
-        self.username_input_field.clear();
-        self.password_input_field.clear();
-
-        let client = reqwest::blocking::Client::new();
-        let res = client.post("https://auth.kattmys.se/login")
-            .json(&protocol::kattauth::LoginDetails {
-                username,
-                hashword,
-            })
-            .send();
-
-        match res {
-            Ok(resp) => {
-                dbg!(&resp.status());
-                if resp.status().is_success() {
-                    let token: String = match resp.json() {
-                        Ok(token) => token,
-                        Err(_e) => { return }
-                    };
-                    self.current_token = Some(token);
-                }
-
-            }
-            Err(e) => {
-                dbg!(&e);
-            }
         }
     }
 }

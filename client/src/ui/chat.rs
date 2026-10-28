@@ -1,17 +1,12 @@
 pub use super::create_channel_modal::CreateChannelModal; 
 
-use crate::state::{ self, State, AuthStatus };
-use crate::net::ConnEvent;
+use crate::state::State;
 use crate::ui::Message;
 use crate::state::ChatMessage;
 
-use std::sync::LazyLock;
-static IMAGE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<image:([^>]*)>").unwrap());
 
-use regex::Regex;
-use protocol::{ ChannelId, ClientPacket };
-use iced::widget::{ text, text_input, button, column, row, scrollable, Row, container, image };
-use iced::{ Fill, Length, Element, Color, Background, Alignment };
+use iced::widget::{ text, text_input, column, row, scrollable, Row, container, image };
+use iced::{ Length, Element, Color, Alignment };
 
 #[must_use]
 pub fn server_view(state: &State) -> Element<'_, Message> {
@@ -28,7 +23,7 @@ pub fn server_view(state: &State) -> Element<'_, Message> {
 
 fn message<'a>(state: &'a State, message: &'a ChatMessage) -> Element<'a, Message> {
     // Bilderna
-    let images: Vec<Element<'a, Message>> = IMAGE_RE
+    let images: Vec<Element<'a, Message>> = crate::state::IMAGE_TAG
         .captures_iter(&message.content)
         .filter_map(|caps| caps.get(1))
         // .filter_map(
@@ -52,7 +47,7 @@ fn message<'a>(state: &'a State, message: &'a ChatMessage) -> Element<'a, Messag
         })
         .collect();
 
-    let clean_text = IMAGE_RE
+    let clean_text = crate::state::IMAGE_TAG
         .replace_all(&message.content, "")
         .trim()
         .to_string();

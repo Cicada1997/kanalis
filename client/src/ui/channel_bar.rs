@@ -1,13 +1,10 @@
 pub use super::create_channel_modal::CreateChannelModal; 
 
-use crate::state::{ self, State, AuthStatus };
+use crate::state::State;
 use crate::ui::Message;
-use crate::net::ConnEvent;
 
-use regex::Regex;
-use protocol::{ ChannelId, ClientPacket };
-use iced::widget::{ text, text_input, button, column, row, scrollable, Row, container, image };
-use iced::{ Fill, Length, Element, Color, Background, Alignment };
+use iced::widget::{ text, button, column, scrollable };
+use iced::{ Fill, Element, Color, Background };
 
 #[derive(Debug, Clone, Default)]
 pub enum ChannelButton {
