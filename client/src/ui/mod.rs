@@ -1,5 +1,6 @@
 pub mod create_channel_modal;
 pub mod channel_bar;
+pub mod member_bar;
 pub mod chat;
 pub mod auth;
 
@@ -10,7 +11,7 @@ use crate::net::ConnEvent;
 
 use protocol::{ ChannelId, ClientPacket };
 
-use iced::widget::text;
+use iced::widget::{ text, operation };
 use iced::{ Task, Length, Element };
 
 #[derive(Clone)]
@@ -29,6 +30,12 @@ pub enum Message {
     LoginResult(Result<String, String>),
     
     ImageLoaded(String, Option<Vec<u8>>),
+
+    FocusNext,
+    FocusPrevious,
+
+    ChannelNext,
+    ChannelPrevious,
 }
 
 pub fn update(state: &mut State, event: Message) -> Task<Message> {
@@ -106,7 +113,20 @@ pub fn update(state: &mut State, event: Message) -> Task<Message> {
         }
 
         // TODO: reload with "not-found" image
-        Message::ImageLoaded(_, None) => Task::none()
+        Message::ImageLoaded(_, None) => Task::none(),
+
+        Message::FocusNext => operation::focus_next(),
+        Message::FocusPrevious => operation::focus_previous(),
+
+        Message::ChannelNext => {
+            state.channel_next();
+            Task::none()
+        }
+
+        Message::ChannelPrevious => {
+            state.channel_previous();
+            Task::none()
+        }
     }
 }
 

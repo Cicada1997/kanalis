@@ -49,11 +49,14 @@ impl AuthComponent {
         }
     }
 
+    pub const USERNAME_FIELD_ID: &'static str = "login_username_field";
+
     #[must_use]
     pub fn view(&self) -> Element<'_, Message> {
         let form: Element<'_, LoginMessage> = column![
             text("Logga in").size(24),
             text_input("Användarnamn", &self.username)
+                .id(Self::USERNAME_FIELD_ID)
                 .on_input(LoginMessage::UsernameChanged)
                 .on_submit(LoginMessage::UsernameSubmitted),
             text_input("Lösenord", &self.password)

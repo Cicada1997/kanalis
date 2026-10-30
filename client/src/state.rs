@@ -11,7 +11,7 @@ use serde::{ Serialize, Deserialize };
 use chrono::naive::NaiveDateTime;
 use regex::Regex;
  
-use iced::widget::image;
+use iced::widget::{ image, operation };
 use iced::Task;
 
 use std::sync::LazyLock;
@@ -66,15 +66,20 @@ pub struct State {
 }
 
 impl State {
-    pub fn new() -> Self {
-        Self {
+    pub fn new() -> (Self, Task<ui::Message>) {
+        let state = Self {
             current_token: dotenv::var("TOKEN").ok(),
             ..Default::default()
-        }
+        };
+        // Only focus the login field if we actually show the login screen
+        let task = if state.current_token.is_none() {
+            operation::focus("username")
+        } else {
+            Task::none()
+        };
+        (state, task)
     }
-}
 
-impl State {
     pub fn apply_conn_event(&mut self, event: ConnEvent) -> Task<ui::Message> {
         match event {
             ConnEvent::Connecting => {
@@ -173,6 +178,38 @@ impl State {
         }
     }
 
+    pub fn channel_next(&mut self) {
+        self.move_selected_channel(false);
+    }
+
+    pub fn channel_previous(&mut self) {
+        self.move_selected_channel(true);
+    }
+
+    fn move_selected_channel(&mut self, backwards: bool) {
+        let len = self.channels.len();
+        if len <= 1 {
+            return;
+        }
+
+        let Some(current) = self
+            .channels
+            .iter()
+            .position(|ch| ch.id == self.current_channel)
+        else {
+            return;
+        };
+
+        let next = if backwards {
+            (current + len - 1) % len
+        } else {
+            (current + 1) % len
+        };
+
+        let id = self.channels[next].id;
+        self.switch_channel(id);
+    }    
+
     pub fn send_current_message(&mut self) {
         if self.current_message.trim().is_empty() { return; }
 
@@ -190,4 +227,6 @@ impl State {
             eprintln!("Unable to send message, sender is not yet defined.");
         }
     }
+
+    
 }

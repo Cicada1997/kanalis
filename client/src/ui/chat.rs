@@ -16,6 +16,7 @@ pub fn server_view(state: &State) -> Element<'_, Message> {
             chat_history(state),
             chat_input(state),
         ].width(Length::FillPortion(1)).spacing(20),
+        super::member_bar::render(state),
     ]
     .spacing(20)
     .into()
@@ -103,8 +104,10 @@ fn chat_history(state: &State) -> Element<'_, Message> {
         .into()
 }
  
+pub const CHAT_FIELD_ID: &'static str = "chat_field";
 fn chat_input(state: &State) -> Element<'_, Message> {
     text_input("Skriv något till n00bsen...", &state.current_message)
+        .id(CHAT_FIELD_ID)
         .on_input(Message::UpdateMessage)
         .on_submit(Message::SendMessage)
         .into()

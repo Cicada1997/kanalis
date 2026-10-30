@@ -1,0 +1,30 @@
+#!/bin/bash
+set -euo pipefail
+
+OUT=unique_export_windows_client
+
+cargo build -p client --release --target x86_64-pc-windows-gnu
+
+rm -rf "$OUT" export/client_export_windows.7z
+mkdir -p export "$OUT"
+
+cp target/x86_64-pc-windows-gnu/release/client.exe "$OUT/kanalis_desktop.exe"
+cp -r assets "$OUT/"
+
+cat > "$OUT/run.ps1" <<'EOF'
+Set-Location $PSScriptRoot
+$env:HOST = "cicada.kattmys.se:1997"
+.\kanalis_desktop.exe
+EOF
+
+# Fallback for machines where PowerShell scripts are blocked (see below)
+cat > "$OUT/run.bat" <<'EOF'
+@echo off
+cd /d "%~dp0"
+set HOST=cicada.kattmys.se:1997
+kanalis_desktop.exe
+EOF
+sed -i 's/$/\r/' "$OUT/run.bat"   # batch files want CRLF line endings
+
+7z a export/client_export_windows.7z "$OUT"
+rm -r "$OUT"
