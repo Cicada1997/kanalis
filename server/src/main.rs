@@ -1,13 +1,10 @@
 pub mod server;
-// pub mod protocol;
 pub mod intercom;
 pub mod client_handler;
 pub mod connection;
 pub mod packet_handling;
 pub mod ports;
 pub mod db;
-
-// pub mod test;
 
 pub mod result {
     use anyhow;

@@ -27,10 +27,7 @@ fn message<'a>(state: &'a State, message: &'a ChatMessage) -> Element<'a, Messag
     let images: Vec<Element<'a, Message>> = crate::state::IMAGE_TAG
         .captures_iter(&message.content)
         .filter_map(|caps| caps.get(1))
-        // .filter_map(
         .map(|m| {
-            // match state.image_cache.get(m.as_str()) {
-            // Some(handle) => {
             state.image_cache.get(m.as_str())
                 .and_then(|handle| {
                     Some(

@@ -1,3 +1,11 @@
+use protocol::{ ClientPacket, ServerPacket, UserId, User };
+use crate::{
+    result::Result,
+    intercom::{ ServerChannel, ClientChannel, Request },
+    packet_handling::{ just_connected, send_messages_before },
+    db::Message,
+};
+
 use std::env;
 use tokio::task::JoinHandle;
 use std::sync::Arc;
@@ -6,13 +14,6 @@ use std::collections::HashMap;
 use anyhow::{ anyhow, Context };
 use sqlx::postgres::{ PgPoolOptions };
 
-use crate::{
-    result::Result,
-    protocol::{ ClientPacket, ServerPacket, UserId, User },
-    intercom::{ ServerChannel, ClientChannel, Request },
-    packet_handling::{ just_connected, send_messages_before },
-    db::Message,
-};
 
 pub struct Server {
     channel: ServerChannel,
@@ -77,11 +78,16 @@ impl Server {
         loop {
             tokio::select! {
                 request = self.channel.recv() => {
-                    let Some(Request { packet, user }) = request else { continue };
-                    dbg!(&packet);
 
-                    match packet {
-                        ClientPacket::JustConnected(reply_tx) => {
+                    let Some(request) = request else { continue };
+
+                    match request {
+                        Request::Disconnected { user } => {
+                            self.active_users.write().await.remove(&user.user_id);
+                            println!("User Disconnected: {}", user.username);
+                        }
+
+                        Request::Connected { reply_tx, user } => {
                             self.active_users.write().await.insert(user.user_id, reply_tx.clone());
 
                             let pool = pool.clone();
@@ -93,93 +99,96 @@ impl Server {
                             });
                         }
 
-                        ClientPacket::Message { channel_id, content, .. } => {
-                            let msg = sqlx::query_as!(
-                                Message,
-                                "
-                                    INSERT INTO messages (author_id, channel_id, content)
-                                    VALUES ($1, $2, $3)
-                                    RETURNING *
-                                ",
-                                user.user_id,
-                                channel_id,
-                                content
-                            )
-                                .fetch_one(&pool)
-                                .await?;
+                        Request::External { packet, user } => {
+                            match packet {
+                                ClientPacket::Message { channel_id, content, .. } => {
+                                    let msg = sqlx::query_as!(
+                                        Message,
+                                        r#"
+                                            INSERT INTO messages (author_id, channel_id, content)
+                                            VALUES ($1, $2, $3)
+                                            RETURNING *
+                                        "#,
+                                        user.user_id,
+                                        channel_id,
+                                        content
+                                    )
+                                        .fetch_one(&pool)
+                                    .await?;
 
-                            let server_packet = msg.to_response( User { name: user.username.clone() });
-                            self.channel.send(server_packet);
-                        }
-                        ClientPacket::GetChannelMessages { channel_id, before }  => {
-                            // TODO: implement cache
-                            let pool = pool.clone();
-                            let active_users = self.active_users.clone();
-                            tokio::spawn(async move {
-                                if let Some(reply_tx) = active_users.read().await.get(&user.user_id) {
-                                    send_messages_before(pool, reply_tx.clone(), channel_id, before, &user).await;
-                                } else {
-                                    eprintln!("Unable to find user channel in active_users: {user:?}");
+                                    let server_packet = msg.to_response( User { name: user.username.clone() });
+                                    self.channel.send(server_packet);
                                 }
-                            });
-                        }
 
-                        ClientPacket::Disconnected => {
-                            self.active_users.write().await.remove(&user.user_id);
-                            println!("User Disconnected: {}", user.username);
-                        }
+                                ClientPacket::GetChannelMessages { channel_id, before }  => {
+                                    // TODO: implement cache
+                                    let pool = pool.clone();
+                                    let active_users = self.active_users.clone();
+                                    tokio::spawn(async move {
+                                        if let Some(reply_tx) = active_users.read().await.get(&user.user_id) {
+                                            send_messages_before(pool, reply_tx.clone(), channel_id, before, &user).await;
+                                        } else {
+                                            eprintln!("Unable to find user channel in active_users: {user:?}");
+                                        }
+                                    });
+                                }
 
-                        // ClientPacket::DeleteChannel { channel_id } => {
-                        //     if !user.admin {
-                        //         continue;
-                        //     }
-                        //
-                        //     let mut tx = pool.begin().await?;
-                        //
-                        //     sqlx::query!("DELETE FROM messages WHERE channel_id = $1", channel_id)
-                        //         .execute(&mut *tx)
-                        //         .await?;
-                        //
-                        //     sqlx::query!("DELETE FROM channel_members WHERE channel_id = $1", channel_id)
-                        //         .execute(&mut *tx)
-                        //         .await?;
-                        //
-                        //     sqlx::query!("DELETE FROM channels WHERE id = $1", channel_id)
-                        //         .execute(&mut *tx)
-                        //         .await?;
-                        //
-                        //     tx.commit().await?;
-                        // }
+                                // ClientPacket::Disconnected => {
+                                //     self.active_users.write().await.remove(&user.user_id);
+                                //     println!("User Disconnected: {}", user.username);
+                                // }
 
-                        ClientPacket::CreateChannel { name, private } => {
-                            if !user.admin {
-                                continue;
+                                // ClientPacket::DeleteChannel { channel_id } => {
+                                //     if !user.admin {
+                                //         continue;
+                                //     }
+                                //
+                                //     let mut tx = pool.begin().await?;
+                                //
+                                //     sqlx::query!("DELETE FROM messages WHERE channel_id = $1", channel_id)
+                                //         .execute(&mut *tx)
+                                //         .await?;
+                                //
+                                //     sqlx::query!("DELETE FROM channel_members WHERE channel_id = $1", channel_id)
+                                //         .execute(&mut *tx)
+                                //         .await?;
+                                //
+                                //     sqlx::query!("DELETE FROM channels WHERE id = $1", channel_id)
+                                //         .execute(&mut *tx)
+                                //         .await?;
+                                //
+                                //     tx.commit().await?;
+                                // }
+
+                                ClientPacket::CreateChannel { name, private } => {
+                                    if !user.admin {
+                                        continue;
+                                    }
+
+                                    // TODO: handle name conflicts
+
+                                    sqlx::query!(
+                                        "
+                                            INSERT INTO channels (name, private)
+                                            VALUES ($1, $2)
+                                            ON CONFLICT (name) DO NOTHING
+                                        ",
+                                        name,
+                                        private,
+                                    )
+                                    .execute(&pool)
+                                    .await?;
+                                }
+
+                                ClientPacket::AuthToken(_) => { }
                             }
 
-                            // TODO: handle name conflicts
-
-                            sqlx::query!(
-                                "
-                                    INSERT INTO channels (
-                                        name,
-                                        private
-                                    )
-                                    VALUES ($1, $2)
-                                    ON CONFLICT (name) DO NOTHING
-                                ",
-                                name,
-                                private,
-                            )
-                                .execute(&pool)
-                                .await?;
                         }
 
-                        ClientPacket::LastUpdated { .. } | ClientPacket::AuthToken(_) => { }
                     }
-
                 }
-
                 err = err_receiver.recv() => {
+
                     if let Some(err) = err {
                         eprintln!("A critical error occured on a dispatched thread: {err}");
                         return Err(err);

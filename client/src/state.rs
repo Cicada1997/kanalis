@@ -107,7 +107,7 @@ impl State {
         match packet {
             ServerPacket::ServerData { name, channels, members } => {
                 println!("Server name is {}", name);
-                if let Some(first_channel) = channels.first() {
+                if let Some(first_channel) = channels.first() && self.channels.len() < 1 {
                     self.switch_channel(first_channel.id);
                 }
                 self.channels = channels;

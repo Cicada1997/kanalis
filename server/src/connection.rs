@@ -2,9 +2,7 @@ use std::pin::Pin;
 use std::future::Future;
 use tokio::sync::{ mpsc };
 
-use crate::{
-    protocol::{ self, ClientPacket, ServerPacket },
-};
+use protocol::{ self, ClientPacket, ServerPacket };
 
 pub type PinBoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 

@@ -1,7 +1,13 @@
 use crate::{
-    protocol::{ self, UserDetails, ServerPacket, ClientPacket },
     intercom::{ self, ClientChannel },
     connection::{ ClientConnection },
+};
+
+use protocol;
+use protocol::{
+    ServerPacket,
+    ClientPacket,
+    kattauth::UserDetails,
 };
 
 pub struct ClientHandler<C: ClientConnection> {
@@ -38,10 +44,8 @@ impl<C: ClientConnection> ClientHandler<C> {
 
                 self.user = resp.json::<UserDetails>().await.ok();
                 if let Some(user) = self.user.clone() {
-                    // let (sender, response_ch) = oneshot::channel();
-
-                    self.channel.send(intercom::Request {
-                        packet: ClientPacket::JustConnected(self.channel.get_sender()),
+                    self.channel.send(intercom::Request::Connected {
+                        reply_tx: self.channel.get_sender(),
                         user: user.clone(),
                     }).await;
 
@@ -57,17 +61,26 @@ impl<C: ClientConnection> ClientHandler<C> {
         }
     }
 
+    async fn disconnect(&mut self) {
+        if let Some(ref user) = self.user {
+            println!("connection closed for {}", user.username);
+            self.channel.send(intercom::Request::Disconnected {
+                user: user.clone()
+            }).await;
+        }
+    }
+
     pub async fn start(&mut self) {
         loop {
             tokio::select! {
                 packet = self.conn.recv() => {
                     let Some(packet) = packet else {
-                        println!("connection closed");
-                        return
+                        self.disconnect().await;
+                        return;
                     };
 
                     if let Some(user) = &self.user {
-                        self.channel.send(intercom::Request {
+                        self.channel.send(intercom::Request::External {
                             packet,
                             user: user.clone(),
                         }).await;

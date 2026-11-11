@@ -1,8 +1,8 @@
+use protocol::{ ClientPacket, ServerPacket };
 use crate::{
     result::Result,
     server::{ ServerPort },
     client_handler::ClientHandler,
-    protocol::{ ClientPacket, ServerPacket },
     connection::{ ClientConnection, PinBoxFuture },
     intercom::{ ClientChannel },
 };

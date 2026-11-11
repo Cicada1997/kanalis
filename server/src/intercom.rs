@@ -1,15 +1,22 @@
-use crate::{
-    result::Result,
-    protocol::{ ClientPacket, ServerPacket, UserDetails },
-};
+use crate::result::Result;
+use protocol::kattauth::UserDetails;
+use protocol::{ ClientPacket, ServerPacket };
 
-use tokio::{
-    sync::{ broadcast, mpsc },
-};
+use tokio::sync::{ broadcast, mpsc };
 
-pub struct Request {
-    pub user: UserDetails,
-    pub packet: ClientPacket,
+pub enum Request {
+    External {
+        user: UserDetails,
+        packet: ClientPacket,
+    },
+    Connected {
+        user: UserDetails,
+        reply_tx: mpsc::Sender<ServerPacket>,
+    },
+    Disconnected {
+        user: UserDetails,
+    },
+
 }
 
 pub struct ServerChannel {

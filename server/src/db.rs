@@ -1,7 +1,4 @@
-use crate::{
-    // result::Result,
-    protocol::{ ServerPacket, MessageId, ChannelId, UserId, User },
-};
+use protocol::{ ServerPacket, MessageId, ChannelId, UserId, User };
 
 use serde::{ Serialize, Deserialize };
 use sqlx::FromRow;

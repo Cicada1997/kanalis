@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+protocol = { path = "../protocol" }
+ 
 anyhow = { version = "1.0.104", features = ["backtrace"] }
 axum = { version = "0.8.9", features = ["ws"] }
 chrono = { version = "0.4.45", features = ["serde"] }
