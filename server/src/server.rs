@@ -1,23 +1,21 @@
 use protocol::{ ClientPacket, ServerPacket, UserId, User };
-use crate::{
-    result::Result,
-    intercom::{ ServerChannel, ClientChannel, Request },
-    packet_handling::{ just_connected, send_messages_before },
-    db::Message,
-};
+
+use crate::result::Result;
+use crate::intercom::{ ServerChannel, ClientChannel, Request };
+use crate::packet_handling::{ get_server_data, send_server_data, send_messages_before };
+use crate::db::Message;
 
 use std::env;
-use tokio::task::JoinHandle;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use std::collections::HashMap;
+use tokio::task::JoinHandle;
+use tokio::sync::RwLock;
 use anyhow::{ anyhow, Context };
-use sqlx::postgres::{ PgPoolOptions };
+use sqlx::postgres::PgPoolOptions;
 
 
 pub struct Server {
     channel: ServerChannel,
-    // db: Box<dyn Database + Send + Sync>,
     serverports: Vec<JoinHandle<()>>,
     active_users: Arc<RwLock<HashMap<UserId, tokio::sync::mpsc::Sender<ServerPacket>>>>,
 }
@@ -73,7 +71,7 @@ impl Server {
             return Err(anyhow!("No ports listening for clients, exiting..."));
         }
 
-        let (err_sender, mut err_receiver) = tokio::sync::mpsc::channel(128);
+        let (err_tx, mut err_receiver) = tokio::sync::mpsc::channel(128);
 
         loop {
             tokio::select! {
@@ -89,14 +87,16 @@ impl Server {
 
                         Request::Connected { reply_tx, user } => {
                             self.active_users.write().await.insert(user.user_id, reply_tx.clone());
-
-                            let pool = pool.clone();
-                            let err_sender = err_sender.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = just_connected(pool, reply_tx, &user).await {
-                                    let _ = err_sender.send(e).await;
-                                }
-                            });
+                            {
+                                let pool     = pool.clone();
+                                let reply_tx = reply_tx.clone();
+                                let err_tx   = err_tx.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) = send_server_data(pool, reply_tx, &user).await {
+                                        let _ = err_tx.send(e).await;
+                                    }
+                                });
+                            }
                         }
 
                         Request::External { packet, user } => {
@@ -113,7 +113,7 @@ impl Server {
                                         channel_id,
                                         content
                                     )
-                                        .fetch_one(&pool)
+                                    .fetch_one(&pool)
                                     .await?;
 
                                     let server_packet = msg.to_response( User { name: user.username.clone() });
@@ -178,6 +178,18 @@ impl Server {
                                     )
                                     .execute(&pool)
                                     .await?;
+                                    for (user_id, user_tx) in self.active_users.read().await.iter() {
+                                        let pool = pool.clone();
+                                        let user_tx = user_tx.clone();
+                                        let user_id = user_id.clone();
+                                        tokio::spawn(async move {
+                                            if let Ok(packet) = get_server_data(pool, user_id).await {
+                                                if let Err(e) = user_tx.send(packet).await {
+                                                    eprintln!("failed to broadcast serverdata to client: {e:?}");
+                                                }
+                                            }
+                                        });
+                                    }
                                 }
 
                                 ClientPacket::AuthToken(_) => { }
@@ -208,7 +220,7 @@ impl Default for Server {
 pub trait ServerPort {
     /// # Errors
     ///
-    /// Often return `Err` when the function is not able to get neccessary environment variables and
+    /// Often returns `Err` when the function is not able to get neccessary environment variables and
     /// more.
     fn new(client_channel: ClientChannel) -> Result<Self> where Self: Sized;
     fn listen(&self) -> impl std::future::Future<Output = Result<()>> + Send;

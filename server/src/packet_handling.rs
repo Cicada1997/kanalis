@@ -1,27 +1,28 @@
-use crate::{ result::Result };
+use crate::result::Result;
 
 use protocol::{
     self,
     ServerPacket,
     kattauth::UserDetails,
     User,
+    UserId,
     Member,
     Channel,
     ChannelId,
     MessageId
 };
 
-use sqlx::postgres::{ PgPool };
-// use anyhow::{ anyhow, Context };
+use sqlx::postgres::PgPool;
 
 /// # Errors
 /// Accumulates the errors from database and client interactions when building and sending a
 /// `ServerData` packet.
-pub async fn just_connected(
+pub async fn send_server_data(
     pool:   PgPool,
     output: tokio::sync::mpsc::Sender<ServerPacket>,
     user:   &UserDetails,
 ) -> Result<()> {
+    // TODO move to Connected
     let _ = sqlx::query!(
         "
             INSERT INTO users (user_id, username)
@@ -33,6 +34,26 @@ pub async fn just_connected(
     )
         .execute(&pool)
         .await?;
+
+    let packet = get_server_data(pool, user.user_id).await?;
+
+    let res = output.send(packet).await;
+
+    if let Err(e) = res {
+        eprintln!("An error occured while transmitting data internally to the client handler: {e} (recipient: {user:?})");
+        return Ok(())
+    }
+    
+    Ok(())
+}
+
+/// # Errors
+/// Accumulates the errors from database and client interactions when building and sending a
+/// `ServerData` packet.
+pub async fn get_server_data(
+    pool:    PgPool,
+    user_id: UserId,
+) -> Result<ServerPacket> {
 
     let channels = sqlx::query_as!(
         Channel,
@@ -48,7 +69,7 @@ pub async fn just_connected(
                 AND   cm.access = true
             )
         ",
-        user.user_id
+        user_id
     )
         .fetch_all(&pool)
         .await?;
@@ -63,20 +84,13 @@ pub async fn just_connected(
         .fetch_all(&pool)
         .await?;
 
-    let res = output.send(ServerPacket::ServerData {
+    let packet = ServerPacket::ServerData {
         name: String::from("Cicadas Server"),
         channels,
         members,
-    })
-        .await;
-        // .inspect_err(|e| eprintln!("Unable to send Server data to client {user:?}: {e}"));
+    };
 
-    if let Err(e) = res {
-        eprintln!("An error occured while transmitting data internally to the client handler: {e} (recipient: {user:?})");
-        return Ok(())
-    }
-    
-    Ok(())
+    return Ok(packet);
 }
 
 pub async fn send_messages_before(
@@ -144,13 +158,11 @@ pub async fn send_messages_before(
     match access_res {
         Ok(true) => {} // authorized => proceed
         Ok(false) => {
-            let _ = reply_tx
-                .send(ServerPacket::Error {
-                    code: protocol::Error::Unauthorized,
-                    reason: "You are either not allowed in this channel or it does not exist."
-                        .to_string(),
-                })
-                .await;
+            let _ = reply_tx.send(ServerPacket::Error {
+                code: protocol::Error::Unauthorized,
+                reason: "You are either not allowed in this channel or it does not exist.".to_string(),
+            }).await;
+
             return;
         }
         Err(e) => {

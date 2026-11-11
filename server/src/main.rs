@@ -6,10 +6,12 @@ pub mod packet_handling;
 pub mod ports;
 pub mod db;
 
-pub mod result {
+pub mod error {
     use anyhow;
-    
-    pub type Result<T> = std::result::Result<T, anyhow::Error>;
+    pub type Error = anyhow::Error;
+}
+pub mod result {
+    pub type Result<T> = std::result::Result<T, crate::error::Error>;
 }
 
 use crate::{
